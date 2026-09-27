@@ -10,6 +10,11 @@ from reprocheck.models.finding import Confidence, Finding, Severity
 from reprocheck.models.git import GitInfo
 from reprocheck.models.project import ProjectScan
 from reprocheck.models.report import ScanReport
+from reprocheck.models.verdict import (
+    ReproducibilityVerdict,
+    UnverifiedItem,
+    VerdictStatus,
+)
 
 __all__ = [
     "Confidence",
@@ -20,6 +25,9 @@ __all__ = [
     "ProjectScan",
     "PythonRequirement",
     "ReadmeCommand",
+    "ReproducibilityVerdict",
     "ScanReport",
     "Severity",
+    "UnverifiedItem",
+    "VerdictStatus",
 ]

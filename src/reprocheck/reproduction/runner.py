@@ -22,6 +22,7 @@ from pathlib import Path
 
 from reprocheck import __version__
 from reprocheck.checks.reproduction import check_reproduction
+from reprocheck.checks.verdict import compute_verdict
 from reprocheck.facts import Facts
 from reprocheck.models import ScanReport
 from reprocheck.reproduction import fingerprint as integrity
@@ -260,6 +261,7 @@ def _finish(
     report.reproduction_findings = check_reproduction(
         reproduction, reprocheck_version=__version__
     )
+    report.verdict = compute_verdict(report)
     return report
 
 

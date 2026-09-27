@@ -34,9 +34,18 @@ DEPENDENCY_CATEGORY = "dependencies"
 CI_REFERENCE_CATEGORY = "ci-references"
 
 
-def format_report(report: ScanReport, output: str, verbose: bool = False) -> str:
+def format_report(
+    report: ScanReport,
+    output: str,
+    verbose: bool = False,
+    markdown: str | None = None,
+) -> str:
     """Render a compact human-readable summary of ``report``."""
     lines: list[str] = ["ReproCheck", ""]
+    lines.append(f"Verdict: {report.verdict.status.value}")
+    for reason in report.verdict.reasons:
+        lines.append(f"  - {reason}")
+    lines.append("")
     lines.append(f"Project: {report.project.name}")
     lines.append(f"Path: {report.project.path}")
     lines.append(f"Python files: {report.project.python_file_count}")
@@ -94,9 +103,15 @@ def format_report(report: ScanReport, output: str, verbose: bool = False) -> str
     if report.reproduction:
         lines.append("")
         lines.extend(_reproduction_section(report, verbose=verbose))
+    if report.verdict.not_verified:
+        lines.append("")
+        lines.append("Not verified (unknown, not failed):")
+        lines.extend(f"  - {item.item}" for item in report.verdict.not_verified)
     lines.append("")
     lines.append("Report:")
     lines.append(f"  {output}")
+    if markdown:
+        lines.append(f"  {markdown}")
     return "\n".join(lines)
 
 

@@ -5,8 +5,8 @@ repository and is never modified: ReproCheck only reads it.
 
 - Target: `C:\Projetos\OpenClimateFix\open-source-quartz-solar-forecast`
 - Commit scanned: `c07ad7402598979a7cd3c2eab7430098a3d56e78` (branch `main`, clean)
-- ReproCheck version: `0.6.0` (TASK-003)
-- Date: 2026-09-26
+- ReproCheck version: `0.7.0` (TASK-007 report run; detection unchanged since V0.6)
+- Date: 2026-09-27
 
 The `OCF-Bxx` list below is an **external benchmark only**. It was reconstructed by
 manual inspection of the target repository during TASK-002; it is not part of any
@@ -204,14 +204,63 @@ ships `api/`, `dashboards/` and `quartz_solar_forecast/` as separate importable
 packages. All three imported cleanly, so the package layout is coherent; the
 version is not.
 
+## Human-readable report (V0.7)
+
+The same run was repeated with `0.7.0` to produce the two reports and the
+verdict, again with `--network --runtime-checks` and nothing else:
+
+```
+python selected    3.11.16
+install            exit 0 after 197s
+installed          quartz_solar_forecast 0.0.1  (flagged as a fallback)
+pip check          clean
+imports            api OK | dashboards OK | quartz_solar_forecast OK
+pytest collection  not run: pytest is not installed in the reproduced venv
+unchanged          yes (221 tracked files, 0 changed paths)
+verdict            PARTIAL
+```
+
+**Verdict: `PARTIAL`**, and the reason is a single line in the report:
+
+```
+5 open warning(s): RC115, RC116, RC140, RC150, RC220
+```
+
+That is the honest outcome. Every step ReproCheck can execute succeeded, so the
+verdict is not `FAIL`; and the report is not `PASS`, because five objective
+warnings are still open — a version derived from Git tags that a copy cannot
+reproduce, a configured `uv` without a lockfile, six CI references on mutable
+refs, uncovered artifacts and a documented `conda install` of a package the
+project does not declare. `PASS` requires no open warning precisely so that this
+project cannot be called fully verified.
+
+What the report says is **not verified**, which is different from what failed:
+
+| Item | Why |
+| --- | --- |
+| test collection | pytest is not installed in the reproduced environment (a development dependency) |
+| full test suite | ReproCheck never executes tests |
+| external datasets and model downloads | never accessed; the repository gitignores its data |
+| remote URLs and VCS references | not fetched, so `download_tz-sam.py` and the clone URL were not resolved |
+| CI action revisions | the seven action references are recorded but never resolved to a commit |
+| published package index state | the installation resolved whatever the index served during this run |
+
+The eight deterministic next actions are exactly the five warning IDs plus the
+three info findings (`RC202`, `RC203`, `RC204`), one line each, changing nothing.
+The report adds no claim of its own: it is the same facts as the JSON, arranged
+for a reader who does not know the RC IDs. `README.md:80` and
+`pyproject.toml [tool.uv]` are the two concrete places a reader is pointed at.
+
 ## Findings actually produced
 
 ```
-Findings: 0 errors / 3 warnings / 1 info
+Findings: 0 errors / 4 warnings / 1 info
   WARN RC115  README installs 'pyresample', absent from the project metadata
   WARN RC116  pyproject.toml [tool.uv] configures uv, but uv.lock is not present
   WARN RC140  .gitignore does not cover .mypy_cache/, .pytest_cache/, .ruff_cache/,
               .venv/, build/, dist/
+  WARN RC150  the version is dynamic from setuptools-git-versioning, so a copy
+              without .git cannot derive it (new in V0.6)
   INFO RC100  6 Python version declaration(s), no inconsistency proven
 
 Dependency findings: 0 errors / 0 warnings / 11 info

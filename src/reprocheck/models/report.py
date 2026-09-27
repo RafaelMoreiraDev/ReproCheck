@@ -14,6 +14,7 @@ from reprocheck.models.detected import (
 from reprocheck.models.finding import Finding
 from reprocheck.models.git import GitInfo
 from reprocheck.models.project import ProjectScan
+from reprocheck.models.verdict import ReproducibilityVerdict
 
 
 def _sorted(items: Iterable[object], *keys: str) -> list[object]:
@@ -43,6 +44,7 @@ class ScanReport:
     workflow_references: list[dict[str, object]] = field(default_factory=list)
     reproduction: dict[str, object] = field(default_factory=dict)
     reproduction_findings: list[Finding] = field(default_factory=list)
+    verdict: ReproducibilityVerdict = field(default_factory=ReproducibilityVerdict)
 
     def to_dict(self) -> dict[str, object]:
         """Return a deterministic, JSON-serialisable representation."""
@@ -84,5 +86,6 @@ class ScanReport:
         }
         if self.reproduction:
             data["reproduction"] = self.reproduction
+        data["verdict"] = self.verdict.to_dict()
         data["facts"] = self.facts
         return data

@@ -9,3 +9,4 @@ dist/
 
 # ReproCheck output
 reprocheck-report.json
+reprocheck-report.md

@@ -12,21 +12,25 @@ Most "it works on my machine" problems are not code bugs. They are missing or
 contradictory facts: no pinned Python version, two competing package managers,
 a documented install command that no longer exists, an uncommitted working tree
 at the moment results were produced. ReproCheck collects those facts into a
-single deterministic JSON report that can be diffed, archived and compared over
-time.
+deterministic JSON report, and projects the same content into a Markdown report
+a person can read without knowing any check ID.
 
 ## How it is organised
 
-ReproCheck separates three layers, and never mixes them:
+ReproCheck separates four layers, and never mixes them:
 
 | Layer | Question | Module |
 | --- | --- | --- |
 | **FACT** | What was observed, and where? | `reprocheck.facts`, `reprocheck.scanners` |
 | **CHECK** | Which deterministic rule does that fact break? | `reprocheck.checks` |
 | **FINDING** | What can be stated, with which evidence and confidence? | `reprocheck.models.Finding` |
+| **VERDICT** | What do all of those facts add up to, and what is still unknown? | `reprocheck.models.verdict`, `reprocheck.checks.verdict` |
 
 A check is a pure function of the facts. It cannot read the filesystem, run code
-or guess: if a conclusion cannot be proven, no finding is emitted.
+or guess: if a conclusion cannot be proven, no finding is emitted. The verdict is
+a pure derivation of the findings: it adds no new claim, and it never produces a
+numeric score.
+
 
 ## `scan` is strictly read-only
 
@@ -40,8 +44,10 @@ ReproCheck **never**:
 - downloads files or performs any network request;
 - changes Git state (no `checkout`, `reset`, `clean`, `commit`, no hooks).
 
-The only write `scan` performs is the JSON report, at the exact path you
-choose (by default `./reprocheck-report.json`, in your current directory).
+The only writes `scan` performs are the two reports, at the exact paths you
+choose (by default `./reprocheck-report.json` and `./reprocheck-report.md`, in
+your current directory). Nothing is written inside the analysed project.
+
 
 Git is inspected with read-only commands only (`rev-parse`, `status
 --porcelain`), executed with `--no-optional-locks` so that even the Git index is
@@ -79,20 +85,37 @@ python -m reprocheck reproduce C:\Projetos\some-project
 
 | Option | Description |
 | --- | --- |
-| `--json <arquivo>` | Report destination. Default: `./reprocheck-report.json` |
+| `--json <arquivo>` | JSON report destination. Default: `./reprocheck-report.json` |
+| `--markdown <arquivo>` | Markdown report destination. Default: `./reprocheck-report.md` |
 | `--verbose` | Also print HEAD, package manager hints and README commands |
 
-Exit codes: `0` success, `1` the report could not be written or `reproduce`
-produced an error-severity finding, `2` usage error or unreadable path.
+`reproduce` takes the same two report options, plus `--network`,
+`--keep-workspace`, `--runtime-checks` and `--verbose`.
+
+### Exit codes
+
+| Code | `scan` | `reproduce` |
+| --- | --- | --- |
+| `0` | report written | verdict is `PASS` |
+| `1` | — | verdict is `PARTIAL` |
+| `2` | — | verdict is `FAIL` |
+| `3` | path unusable, or a report could not be written | same |
+
+`2` is also what argparse uses for a malformed command line, which is why
+operational errors use `3`.
 
 ### Example
 
 ```text
 ReproCheck
 
+Verdict: NOT_ATTEMPTED
+  - no reproduction was attempted; only static facts were collected
+
 Project: example
 Path: C:\Projetos\example
 Python files: 3
+
 
 Git
   repository: yes
@@ -149,14 +172,73 @@ CI findings
 
 Report:
   C:\Projetos\ReproCheck\reprocheck-report.json
+  C:\Projetos\ReproCheck\reprocheck-report.md
 ```
+
+### The verdict
+
+The report ends with one label, derived by explicit rules from the findings and
+the reproduction. There is no score, no grade and no ranking: a number would
+invent precision that was never measured.
+
+| Verdict | When |
+| --- | --- |
+| `PASS` | a reproduction ran, every executed step succeeded, runtime checks were requested and every import succeeded, and **no warning is open** |
+| `PARTIAL` | the reproduction succeeded as far as it went, but something important is unverified (runtime checks not requested, no import target) or a warning is still open |
+| `FAIL` | a failure of the reproduction itself was observed: required Python missing or ambiguous, venv not created, installation failed, `pip check` conflict, a requested import failed or timed out, or the original project changed |
+| `NOT_ATTEMPTED` | no `reproduce` run: `scan` collects static facts only |
+
+`FAIL` requires proof. A project with static findings alone is never `FAIL` — a
+mutable CI action reference is not a failed installation. Conversely `PASS` is
+strict: an open warning keeps the verdict at `PARTIAL`, because a verified but
+uncertain project is not a verified project.
+
+> **`PASS` does not mean "scientifically reproducible".** It means only that the
+> checks ReproCheck ran did succeed. Everything listed under **Not verified** —
+> the full test suite, external datasets, remote URLs, CI action revisions, index
+> state — is still unknown, and a `PASS` never says otherwise.
+
+### Not verified
+
+`reprocheck` separates *failed* from *not checked*, because a step that was never
+executed has no result at all:
+
+```text
+## Not verified
+
+These were not checked. They are not failures: the result is unknown.
+
+- module imports and test collection: runtime checks were not requested (--runtime-checks)
+- full test suite: ReproCheck never executes tests; only collection is attempted, and only with --runtime-checks
+- external datasets and model downloads: never accessed; ReproCheck does not fetch data
+- remote URLs and VCS references: not fetched; only their literal form is recorded
+- CI action revisions: mutable action references are recorded but never resolved to a commit
+- published package index and network services: installations resolve whatever the index serves at run time; no other service is contacted
+```
+
+The same list is in the JSON under `verdict.not_verified`, with the reason for
+each item.
+
+### Recommended next actions
+
+Each finding ID maps to one static sentence: what to look at next, never what to
+change automatically. There is no model, no ranking and no auto-fix, so the same
+findings always produce the same recommendations.
+
+```text
+- **RC150** — Reproduce with VCS metadata available if the exact package version matters, or record the released version explicitly.
+- **RC220** — Consider pinning the external GitHub Action/workflow to a full commit SHA if immutable CI inputs are required.
+- **RC401** — Inspect the installation log before changing dependencies; the cause may be the index, the interpreter or the project itself.
+```
+
 
 ### Report
 
 ```json
 {
-  "reprocheck_version": "0.6.0",
-  "report_schema_version": "3",
+  "reprocheck_version": "0.7.0",
+  "report_schema_version": "6",
+
   "scan_timestamp": "2026-01-01T12:00:00+00:00",
   "project": { "name": "example", "path": "C:\\Projetos\\example", "python_file_count": 3 },
   "git": { "is_repository": true, "branch": "main", "head": "9f1c2b7...", "is_clean": true },
@@ -238,22 +320,92 @@ Report:
     "integrity": { "git_head_before": "9f1c2b7", "git_head_after": "9f1c2b7", "tracked_files": 221, "changed_paths": [] },
     "completed_steps": ["static scan", "workspace created", "project copied", "venv created", "installation succeeded", "pip check completed", "installed version: 1.2.3", "import smoke test: 1 candidate(s)"]
   },
-  "facts": { "package_manager_signals": [], "readme_references": [], "absolute_paths": [], "file_references": [], "tools": [], "gitignore": {}, "project_metadata": { "name": "example", "dependencies": [], "dynamic_fields": [], "version_providers": [] } }
+  "verdict": {
+    "status": "PARTIAL",
+    "reasons": [
+      "2 open warning(s): RC150, RC220",
+      "pytest is not installed in the reproduced environment, so test collection was skipped"
+    ],
+    "not_verified": [
+      { "item": "test collection", "reason": "pytest is not installed in the reproduced environment" },
+      { "item": "full test suite", "reason": "ReproCheck never executes tests; only collection is attempted, and only with --runtime-checks" }
+    ]
+  },
+  "facts": { "package_manager_signals": [], "readme_references": [], "absolute_paths": [], "file_references": [], "tools": [], "gitignore": {}, "project_metadata": { "name": "example", "dependencies": [], "dynamic_fields": ["version"], "version_providers": ["setuptools-git-versioning"] } }
 }
 ```
 
-`report_schema_version` is `"5"`: V0.3 added the `dependencies` section, V0.4
-added `workflow_references`, V0.5 added the optional `reproduction` section and
-V0.6 added `runtime_checks` inside it.
-which only appears when `reproduce` was run. The V0.1 and V0.2 keys are
-unchanged, and V0.2 only added `report_schema_version`, `facts` and `confidence`
-inside each finding.
+`report_schema_version` is `"6"`: V0.3 added the `dependencies` section, V0.4
+added `workflow_references`, V0.5 added the optional `reproduction` section,
+V0.6 added `runtime_checks` inside it, and V0.7 added the `verdict` block, which
+is always present. The `reproduction` section only appears when `reproduce` was
+run. The V0.1 and V0.2 keys are unchanged, and V0.2 only added
+`report_schema_version`, `facts` and `confidence` inside each finding.
+
 
 Every Python version declaration is always recorded separately, per source.
 Which one wins is never decided: the checks only state whether the declarations
 can be satisfied together.
 
+### Markdown report
+
+`reprocheck-report.md` is a projection of the same data for humans. It is
+deterministic, evidence-first, and it omits sections that would be empty.
+Sections, in order: `Summary`, `What worked`, `Problems found` (grouped by
+severity, each finding with ID, severity, confidence, message, evidence and
+location), `Not verified`, `Environment`, `Reproduction`, `CI`, `Dependencies`,
+`Files and configuration`, `Recommended next actions`, `Technical details`.
+
+Abridged example:
+
+````markdown
+# ReproCheck Report
+
+## Summary
+
+- Project: quartz-solar-forecast
+- Path: C:\Projetos\OpenClimateFix\open-source-quartz-solar-forecast
+- Scan time: 2026-09-27T16:31:04+00:00
+- ReproCheck version: 0.7.0
+- Reproduction verdict: **PARTIAL**
+- Why:
+  - 3 open warning(s): RC150, RC203, RC220
+
+## What worked
+
+- Git repository at commit c07ad7402598 (branch main, working tree clean).
+- Python 3.11.16 was selected successfully.
+- A virtual environment was created with Python 3.11.16.
+- Project installation completed successfully (project, exit 0, 291.4s).
+- pip check reported no broken requirements.
+- 3 top-level module(s) imported successfully: `api`, `dashboards`, `quartz_solar_forecast`.
+- The original source tree remained unchanged.
+
+## Not verified
+
+These were not checked. They are not failures: the result is unknown.
+
+- test collection: pytest is not installed in the reproduced environment
+- full test suite: ReproCheck never executes tests; only collection is attempted, and only with --runtime-checks
+- external datasets and model downloads: never accessed; ReproCheck does not fetch data
+
+## Reproduction
+
+- Installation: PASS (strategy: project, exit 0, 291.4s)
+- pip check: PASS (no broken requirements)
+- Installed distribution: quartz-solar-forecast 0.0.1 — looks like a fallback version
+- Imports: 3/3 top-level modules imported successfully
+- Pytest collection: not run — pytest is not installed in the reproduced environment
+- Original source tree: unchanged
+
+## Recommended next actions
+
+- **RC150** — Reproduce with VCS metadata available if the exact package version matters, or record the released version explicitly.
+- **RC220** — Consider pinning the external GitHub Action/workflow to a full commit SHA if immutable CI inputs are required.
+````
+
 ## Findings
+
 
 ### Basic facts (V0.1)
 
@@ -391,8 +543,10 @@ reprocheck reproduce C:\Projetos\some-project --network --keep-workspace
 | `--network` | Allow the **installation step only** to reach a package index. Off by default: `pip` runs with `--no-index` |
 | `--keep-workspace` | Keep the temporary workspace even after a successful attempt |
 | `--runtime-checks` | Also import the installed modules and collect tests. **Executes project code**, so it is off by default |
-| `--json <arquivo>` | Report destination, as in `scan` |
+| `--json <arquivo>` | JSON report destination, as in `scan` |
+| `--markdown <arquivo>` | Markdown report destination, as in `scan` |
 | `--verbose` | Print the steps taken and the log locations |
+
 
 The pipeline is:
 
@@ -521,17 +675,24 @@ real external repository, including the problems it does **not** detect, and
   as a failure with exit code 124.
 - A virtual environment isolates versions, not authority. `reproduce` runs
   untrusted build backends with the current user's privileges.
-- Findings are objective observations only — no reproducibility verdict, no
-  scoring, no ranking of problems.
-- No AI and no auto-fix. The network is only used by an explicit `--network`
-  during installation.
+- The verdict is a label derived from the rules above, not an investigation. It
+  cannot know whether a `PASS` project produces the same numbers as the original
+  run, and it is only as good as the checks behind it.
+- `PASS` requires no open warning, which is a deliberately strict bar: a project
+  with a single mutable CI action reference is `PARTIAL`.
+- The Markdown report repeats the JSON content for humans; it is not a
+  different analysis, and it adds no conclusion of its own.
+- No AI, no auto-fix and no scoring. The recommendations are static sentences
+  attached to finding IDs, not advice derived from the project. The network is
+  only used by an explicit `--network` during installation.
 
 ## Roadmap
 
-- `0.7` — an explicit opt-in mode that preserves Git metadata in the
-  reproduction copy, so a tag-derived version can be reproduced, plus entry
-  point based import discovery.
 - `0.8` — baseline reports: store a report and diff it against a new scan to
   show reproducibility drift over time.
 - `0.9` — `setup.cfg`, `Pipfile` and Conda dependency sources, PEP 735
   `include-group` resolution, and non-Python ecosystems (Node).
+- later — an explicit opt-in mode that preserves Git metadata in the
+  reproduction copy, so a tag-derived version can be reproduced, plus entry
+  point based import discovery.
+

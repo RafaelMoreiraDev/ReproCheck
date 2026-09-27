@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from conftest import inhouse_backend_files, make_wheel, requires_git, run_git
-from reprocheck.cli import EXIT_ERROR, EXIT_OK, main
+from reprocheck.cli import EXIT_ERROR, EXIT_FAIL, EXIT_PARTIAL, main
 from reprocheck.reproduction import python_selector, runner
 from reprocheck.reproduction.installer import (
     BASE_PIP_FLAGS,
@@ -611,12 +611,14 @@ def test_cli_reproduce(make_project, tmp_path, capsys, monkeypatch) -> None:
     code = main(["reproduce", str(root), "--json", str(destination), "--verbose"])
     output = capsys.readouterr().out
 
-    assert code == EXIT_OK
+    # Runtime checks were not requested, so the verdict is PARTIAL (exit 1).
+    assert code == EXIT_PARTIAL
     assert destination.is_file()
     assert "Reproduction" in output
     assert "original project unchanged: yes" in output
     assert "pip check" in output
     assert "steps:" in output
+    assert "Verdict: PARTIAL" in output
 
 
 def test_cli_reproduce_error_exit_code(make_project, tmp_path, monkeypatch) -> None:
@@ -627,7 +629,7 @@ def test_cli_reproduce_error_exit_code(make_project, tmp_path, monkeypatch) -> N
 
     code = main(["reproduce", str(root), "--json", str(tmp_path / "r.json")])
 
-    assert code == EXIT_ERROR
+    assert code == EXIT_FAIL
 
 
 def test_cli_reproduce_missing_path(tmp_path, capsys) -> None:

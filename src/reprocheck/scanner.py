@@ -11,6 +11,7 @@ from pathlib import Path
 
 from reprocheck import __version__
 from reprocheck.checks import ALL_CHECKS, run_checks
+from reprocheck.checks.verdict import compute_verdict
 from reprocheck.facts import (
     KIND_BUILD,
     KIND_CONSTRAINT,
@@ -33,8 +34,8 @@ from reprocheck.scanners import (
 from reprocheck.scanners.dependencies import DependencyScan
 from reprocheck.scanners.project import scan_project
 
-#: Bumped to "5" in V0.6, when ``runtime_checks`` was added to the reproduction.
-REPORT_SCHEMA_VERSION = "5"
+#: Bumped to "6" in V0.7, when ``verdict`` was added to the report.
+REPORT_SCHEMA_VERSION = "6"
 
 
 class ScanError(Exception):
@@ -53,7 +54,7 @@ def scan(path: str | Path) -> ScanReport:
 
 def build_report(facts: Facts) -> ScanReport:
     """Assemble the report from facts, without touching the filesystem."""
-    return ScanReport(
+    report = ScanReport(
         reprocheck_version=__version__,
         scan_timestamp=utc_timestamp(),
         project=facts.project,
@@ -68,6 +69,8 @@ def build_report(facts: Facts) -> ScanReport:
         dependencies=_dependency_section(facts),
         workflow_references=[item.to_dict() for item in facts.workflow_references],
     )
+    report.verdict = compute_verdict(report)
+    return report
 
 
 def _dependency_section(facts: Facts) -> dict[str, object]:

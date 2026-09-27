@@ -129,3 +129,39 @@ installs Python. The choice is deterministic and refused when it is not:
 
 `report.reproduction.workspace` is set to `null` when the workspace was removed,
 so a report never points at a directory that no longer exists.
+
+## What the reports contain
+
+The two reports are written to the paths chosen on the command line (by default
+`./reprocheck-report.json` and `./reprocheck-report.md` in the current
+directory) and nowhere else. Neither file can contain more than what the run
+observed:
+
+| Field | Source |
+| --- | --- |
+| `findings` | the deterministic checks, unchanged from V0.1 to V0.6 |
+| `reproduction` | the steps that ran, the exit codes and the log paths |
+| `verdict` | a derivation of the findings: `PASS`, `PARTIAL`, `FAIL` or `NOT_ATTEMPTED`, with the reasons |
+| `verdict.not_verified` | what was never checked, with the reason; never a failure |
+| Markdown report | the same content, arranged for a reader; no conclusion of its own |
+
+The verdict cannot turn a `scan` into an execution: `NOT_ATTEMPTED` is the only
+verdict a `scan` can produce, whatever the findings are. It is a label, not a
+measurement, and it never becomes a score. `PASS` means "the steps that ran
+succeeded", so the `Not verified` list is part of every report: a reader must
+see, next to the verdict, that the full test suite, the external data and the
+CI revisions were never checked.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | the command completed; for `reproduce`, the verdict is `PASS` |
+| `1` | the verdict is `PARTIAL` |
+| `2` | the verdict is `FAIL` |
+| `3` | operational error: the path is unusable or a report could not be written |
+
+Code `2` is also argparse's own code for a malformed command line, which is why
+operational errors use `3`. A failed attempt keeps its workspace and therefore
+its logs, exactly as before; nothing about the reproduction behaviour changed to
+produce a verdict.
