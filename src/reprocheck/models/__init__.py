@@ -6,12 +6,13 @@ from reprocheck.models.detected import (
     PythonRequirement,
     ReadmeCommand,
 )
-from reprocheck.models.finding import Finding, Severity
+from reprocheck.models.finding import Confidence, Finding, Severity
 from reprocheck.models.git import GitInfo
 from reprocheck.models.project import ProjectScan
 from reprocheck.models.report import ScanReport
 
 __all__ = [
+    "Confidence",
     "DetectedFile",
     "Finding",
     "GitInfo",

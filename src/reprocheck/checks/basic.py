@@ -1,20 +1,9 @@
-"""Objective checks that turn scan data into findings.
-
-Every check in V0.1 states a fact that can be verified from the scan data
-alone. No check infers, guesses or judges code quality.
-"""
+"""Basic objective checks carried over from V0.1 (RC001-RC010)."""
 
 from __future__ import annotations
 
-from reprocheck.models import (
-    DetectedFile,
-    Finding,
-    GitInfo,
-    PackageManagerHint,
-    ProjectScan,
-    PythonRequirement,
-    Severity,
-)
+from reprocheck.facts import ROLE_INSTALLER, ROLE_LOCKFILE, Facts
+from reprocheck.models import Confidence, Finding, Severity
 
 RC001_NO_README = "RC001"
 RC002_NO_PYTHON_VERSION = "RC002"
@@ -30,30 +19,8 @@ RC010_NO_PYTHON_FILES = "RC010"
 _PYTHON_CONFIG_CATEGORIES = frozenset({"python-config"})
 
 
-def run_checks(
-    project: ProjectScan,
-    git: GitInfo,
-    detected_files: list[DetectedFile],
-    python_requirements: list[PythonRequirement],
-    package_manager_hints: list[PackageManagerHint],
-) -> list[Finding]:
-    """Return every finding for a completed scan."""
-    findings: list[Finding] = [
-        _check_readme(detected_files),
-        _check_python_version(python_requirements),
-        _check_python_config(detected_files),
-        _check_git(git),
-        _check_tests(detected_files),
-        _check_workflows(detected_files),
-        _check_gitignore(detected_files),
-        _check_package_managers(package_manager_hints),
-        _check_python_files(project),
-    ]
-    return [finding for finding in findings if finding is not None]
-
-
-def _check_readme(files: list[DetectedFile]) -> Finding | None:
-    if any(item.category == "docs" for item in files):
+def check_readme(facts: Facts) -> Finding | None:
+    if any(item.category == "docs" for item in facts.detected_files):
         return None
     return Finding(
         id=RC001_NO_README,
@@ -62,11 +29,12 @@ def _check_readme(files: list[DetectedFile]) -> Finding | None:
         category="documentation",
         message="Neither README.md nor README.rst was found in the project root.",
         evidence="README.md, README.rst",
+        confidence=Confidence.HIGH,
     )
 
 
-def _check_python_version(requirements: list[PythonRequirement]) -> Finding | None:
-    if requirements:
+def check_python_version(facts: Facts) -> Finding | None:
+    if facts.python_requirements:
         return None
     return Finding(
         id=RC002_NO_PYTHON_VERSION,
@@ -78,11 +46,12 @@ def _check_python_version(requirements: list[PythonRequirement]) -> Finding | No
             "pyproject.toml or GitHub Actions workflows."
         ),
         evidence=".python-version, pyproject.toml, .github/workflows/*",
+        confidence=Confidence.HIGH,
     )
 
 
-def _check_python_config(files: list[DetectedFile]) -> Finding | None:
-    if any(item.category in _PYTHON_CONFIG_CATEGORIES for item in files):
+def check_python_config(facts: Facts) -> Finding | None:
+    if any(item.category in _PYTHON_CONFIG_CATEGORIES for item in facts.detected_files):
         return None
     return Finding(
         id=RC003_NO_PYTHON_CONFIG,
@@ -95,11 +64,12 @@ def _check_python_config(files: list[DetectedFile]) -> Finding | None:
             "Pipfile, poetry.lock, uv.lock)."
         ),
         evidence="pyproject.toml, requirements.txt, setup.py, Pipfile",
+        confidence=Confidence.HIGH,
     )
 
 
-def _check_git(git: GitInfo) -> Finding | None:
-    if not git.is_repository:
+def check_git(facts: Facts) -> Finding | None:
+    if not facts.git.is_repository:
         return Finding(
             id=RC004_NOT_A_GIT_REPOSITORY,
             title="Directory is not a Git repository",
@@ -109,25 +79,27 @@ def _check_git(git: GitInfo) -> Finding | None:
                 "The scanned directory is not the root of a Git repository, "
                 "so no commit can be pinned."
             ),
-            evidence=git.error,
+            evidence=facts.git.error,
+            confidence=Confidence.HIGH,
         )
-    if git.is_clean is False:
+    if facts.git.is_clean is False:
         return Finding(
             id=RC005_DIRTY_WORKING_TREE,
             title="Working tree has uncommitted changes",
             severity=Severity.INFO,
             category="vcs",
             message=(
-                f"git status reported {git.dirty_entries} changed path(s); the "
-                "current state is not fully described by a commit."
+                f"git status reported {facts.git.dirty_entries} changed path(s); "
+                "the current state is not fully described by a commit."
             ),
             evidence="git status --porcelain",
+            confidence=Confidence.HIGH,
         )
-        return None
+    return None
 
 
-def _check_tests(files: list[DetectedFile]) -> Finding | None:
-    if any(item.category == "tests" for item in files):
+def check_tests(facts: Facts) -> Finding | None:
+    if any(item.category == "tests" for item in facts.detected_files):
         return None
     return Finding(
         id=RC006_NO_TESTS,
@@ -136,11 +108,12 @@ def _check_tests(files: list[DetectedFile]) -> Finding | None:
         category="tests",
         message="No tests/ directory was found in the project root.",
         evidence="tests/",
+        confidence=Confidence.HIGH,
     )
 
 
-def _check_workflows(files: list[DetectedFile]) -> Finding | None:
-    if any(item.category == "ci" for item in files):
+def check_workflows(facts: Facts) -> Finding | None:
+    if any(item.category == "ci" for item in facts.detected_files):
         return None
     return Finding(
         id=RC007_NO_CI_WORKFLOWS,
@@ -149,11 +122,12 @@ def _check_workflows(files: list[DetectedFile]) -> Finding | None:
         category="ci",
         message="No .yml/.yaml file was found in .github/workflows/.",
         evidence=".github/workflows/*.yml",
+        confidence=Confidence.HIGH,
     )
 
 
-def _check_gitignore(files: list[DetectedFile]) -> Finding | None:
-    if any(item.path == ".gitignore" for item in files):
+def check_gitignore(facts: Facts) -> Finding | None:
+    if facts.gitignore.exists:
         return None
     return Finding(
         id=RC008_NO_GITIGNORE,
@@ -162,29 +136,46 @@ def _check_gitignore(files: list[DetectedFile]) -> Finding | None:
         category="vcs",
         message="No .gitignore file was found in the project root.",
         evidence=".gitignore",
+        confidence=Confidence.HIGH,
     )
 
 
-def _check_package_managers(hints: list[PackageManagerHint]) -> Finding | None:
-    managers = sorted({hint.manager for hint in hints})
+def check_package_managers(facts: Facts) -> Finding | None:
+    """Report several tools that manage the environment, not several signals.
+
+    Build backends (setuptools) and plain dependency declarations (pip) are
+    excluded: combining them with an installer is a legitimate setup.
+    """
+    managers = sorted(
+        {
+            signal.manager
+            for signal in facts.package_manager_signals
+            if signal.role in {ROLE_INSTALLER, ROLE_LOCKFILE}
+        }
+    )
     if len(managers) < 2:
         return None
     return Finding(
         id=RC009_MULTIPLE_PACKAGE_MANAGERS,
-        title="Multiple package manager signals",
+        title="Multiple active dependency-management signals",
         severity=Severity.INFO,
         category="packaging",
         message=(
-            "Signals for more than one package manager were found: "
+            "Signals for more than one environment/lock tool were found: "
             + ", ".join(managers)
             + ". ReproCheck does not choose one."
         ),
-        evidence="; ".join(f"{hint.manager}: {hint.evidence}" for hint in hints),
+        evidence="; ".join(
+            f"{signal.manager}: {signal.evidence}"
+            for signal in facts.package_manager_signals
+            if signal.role in {ROLE_INSTALLER, ROLE_LOCKFILE}
+        ),
+        confidence=Confidence.HIGH,
     )
 
 
-def _check_python_files(project: ProjectScan) -> Finding | None:
-    if project.python_file_count > 0:
+def check_python_files(facts: Facts) -> Finding | None:
+    if facts.project.python_file_count > 0:
         return None
     return Finding(
         id=RC010_NO_PYTHON_FILES,
@@ -193,4 +184,5 @@ def _check_python_files(project: ProjectScan) -> Finding | None:
         category="python",
         message="No .py file was found in the scanned directory tree.",
         evidence="**/*.py",
+        confidence=Confidence.HIGH,
     )

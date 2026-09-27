@@ -17,6 +17,17 @@ class Severity(StrEnum):
         return self.value
 
 
+class Confidence(StrEnum):
+    """How certain a finding is, based on objective criteria only."""
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+    def to_dict(self) -> str:
+        return self.value
+
+
 @dataclass(frozen=True, slots=True)
 class Finding:
     """A single objective observation about the scanned project."""
@@ -29,6 +40,7 @@ class Finding:
     evidence: str | None = None
     file: str | None = None
     line: int | None = None
+    confidence: Confidence = Confidence.MEDIUM
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -40,4 +52,5 @@ class Finding:
             "evidence": self.evidence,
             "file": self.file,
             "line": self.line,
+            "confidence": self.confidence.value,
         }

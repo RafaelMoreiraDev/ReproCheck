@@ -106,6 +106,27 @@ def test_console_script_help() -> None:
     assert "scan" in completed.stdout
 
 
+CONFLICTING = {
+    "pyproject.toml": "[project]\nname = 'x'\nrequires-python = '>=3.11'\n",
+    ".python-version": "3.10\n",
+    "a.py": 'DATA = "/home/someone/data.csv"\n',
+    "README.md": "# x\n\n```bash\npip install -r missing.txt\n```\n",
+}
+
+
+def test_findings_are_grouped_by_severity(make_project, tmp_path, capsys) -> None:
+    root = make_project(CONFLICTING)
+    main(["scan", str(root), "--json", str(tmp_path / "r.json")])
+    output = capsys.readouterr().out
+
+    assert "Findings\n  0 errors\n" in output
+    assert "warnings" in output
+    assert "info" in output
+    assert "  WARN RC101 " in output
+    assert "  WARN RC120 " in output
+    assert "  WARN RC130 " in output
+
+
 def test_relative_path_argument(make_project, tmp_path, monkeypatch) -> None:
     make_project(PROJECT, name="relative-sample")
     monkeypatch.chdir(tmp_path)

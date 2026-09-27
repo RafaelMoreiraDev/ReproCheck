@@ -77,7 +77,11 @@ def test_full_scan(make_project) -> None:
 
     ids = {finding.id for finding in report.findings}
     assert "RC004" in ids
-    assert "RC009" in ids
+    # uv.lock without any uv configuration, and a documented pip install that
+    # cannot consume the uv lockfile.
+    assert {"RC111", "RC114"} <= ids
+    # setuptools-style signals alone must not be reported as a conflict.
+    assert "RC009" not in ids
     assert "RC001" not in ids
     assert "RC002" not in ids
     assert "RC003" not in ids
@@ -104,6 +108,7 @@ def test_json_report_is_written(tmp_path: Path, make_project) -> None:
     data = json.loads(destination.read_text(encoding="utf-8"))
     assert list(data) == [
         "reprocheck_version",
+        "report_schema_version",
         "scan_timestamp",
         "project",
         "git",
@@ -112,11 +117,22 @@ def test_json_report_is_written(tmp_path: Path, make_project) -> None:
         "package_manager_hints",
         "readme_commands",
         "findings",
+        "facts",
     ]
     assert data["reprocheck_version"] == __version__
+    assert data["report_schema_version"] == "1"
     assert data["project"]["name"] == "example"
     assert data["git"]["is_repository"] is False
     assert data["findings"]
+    assert set(data["facts"]) == {
+        "package_manager_signals",
+        "readme_references",
+        "absolute_paths",
+        "file_references",
+        "tools",
+        "gitignore",
+        "project_metadata",
+    }
 
 
 def test_report_is_deterministic_apart_from_timestamp(make_project) -> None:

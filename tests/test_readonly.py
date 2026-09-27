@@ -100,3 +100,48 @@ def test_readme_commands_are_not_executed(make_project, tmp_path) -> None:
 
     assert any("canary" in item.command for item in report.readme_commands)
     assert not canary.exists()
+
+
+def test_consistency_checks_do_not_touch_the_project(make_project) -> None:
+    """A project that triggers every new check must stay byte-identical."""
+    root = make_project(
+        {
+            "pyproject.toml": (
+                "[project]\nname = 'x'\nrequires-python = '>=3.11'\n"
+                "[tool.uv]\ndev-dependencies = []\n"
+            ),
+            ".python-version": "3.10\n",
+            "uv.lock": "",
+            "poetry.lock": "",
+            "Pipfile.lock": "{}",
+            ".gitignore": "__pycache__/\n",
+            "README.md": (
+                "# x\n\n```bash\n"
+                "pip install -r requirements.txt\n"
+                "python scripts/train.py\n"
+                "conda install pyresample\n"
+                "```\n"
+            ),
+            "a.py": 'DATA = "/home/someone/data.csv"\n',
+            "analysis/run.py": 'frame = read_csv("dataset/testset.csv")\n',
+            "tests/test_a.py": "",
+        }
+    )
+    before = fingerprint(root)
+
+    report = scan(root)
+    ids = {finding.id for finding in report.findings}
+
+    assert {
+        "RC101",
+        "RC110",
+        "RC111",
+        "RC113",
+        "RC115",
+        "RC120",
+        "RC121",
+        "RC130",
+        "RC131",
+        "RC140",
+    } <= ids
+    assert fingerprint(root) == before

@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
-from reprocheck.models import ScanReport, Severity
+from collections import Counter
+
+from reprocheck.models import Finding, ScanReport, Severity
 
 _SEVERITY_LABEL = {
-    Severity.INFO: "INFO",
-    Severity.WARNING: "WARN",
     Severity.ERROR: "ERROR",
+    Severity.WARNING: "WARN",
+    Severity.INFO: "INFO",
+}
+
+_SEVERITY_ORDER = (Severity.ERROR, Severity.WARNING, Severity.INFO)
+
+_SEVERITY_PLURAL = {
+    Severity.ERROR: "errors",
+    Severity.WARNING: "warnings",
+    Severity.INFO: "info",
 }
 
 _CATEGORY_LABEL = {
@@ -54,38 +64,66 @@ def format_report(report: ScanReport, output: str, verbose: bool = False) -> str
     else:
         lines.append("  (nothing detected)")
     if verbose:
-        lines.append("")
-        lines.append("Package managers")
-        if report.package_manager_hints:
-            lines.extend(
-                f"  {hint.manager}: {hint.evidence}"
-                for hint in report.package_manager_hints
-            )
-        else:
-            lines.append("  (no signals)")
-        lines.append("")
-        lines.append("README commands")
-        if report.readme_commands:
-            lines.extend(
-                f"  {item.file}:{item.line}  {item.command}"
-                for item in report.readme_commands
-            )
-        else:
-            lines.append("  (none found)")
+        lines.extend(_verbose_sections(report))
     lines.append("")
 
-    lines.append("Findings")
-    if report.findings:
-        for finding in report.findings:
-            label = _SEVERITY_LABEL[finding.severity]
-            lines.append(f"  {label} {finding.id} {finding.message}")
-    else:
-        lines.append("  (none)")
+    lines.extend(_findings_section(report.findings))
     lines.append("")
-
     lines.append("Report:")
     lines.append(f"  {output}")
     return "\n".join(lines)
+
+
+def _verbose_sections(report: ScanReport) -> list[str]:
+    signals = report.facts.get("package_manager_signals") or []
+    lines = ["", "Package managers"]
+    if signals:
+        lines.extend(
+            f"  {item['manager']} ({item['role']}): {item['evidence']}"
+            for item in signals  # type: ignore[index]
+        )
+    else:
+        lines.append("  (no signals)")
+
+    tools = report.facts.get("tools") or []
+    lines.extend(["", "Tools"])
+    if tools:
+        lines.extend(
+            f"  {item['name']}: {item['evidence']}"
+            for item in tools  # type: ignore[index]
+        )
+    else:
+        lines.append("  (none detected)")
+
+    lines.extend(["", "README commands"])
+    if report.readme_commands:
+        lines.extend(
+            f"  {item.file}:{item.line}  {item.command}"
+            for item in report.readme_commands
+        )
+    else:
+        lines.append("  (none found)")
+    return lines
+
+
+def _findings_section(findings: list[Finding]) -> list[str]:
+    counts = Counter(finding.severity for finding in findings)
+    lines = ["Findings"]
+    for severity in _SEVERITY_ORDER:
+        lines.append(f"  {counts.get(severity, 0)} {_SEVERITY_PLURAL[severity]}")
+    if not findings:
+        return lines + ["", "  (none)"]
+
+    for severity in _SEVERITY_ORDER:
+        group = [item for item in findings if item.severity is severity]
+        if not group:
+            continue
+        lines.append("")
+        for finding in group:
+            lines.append(
+                f"  {_SEVERITY_LABEL[severity]} {finding.id} {finding.message}"
+            )
+    return lines
 
 
 def _yes_no(value: bool) -> str:

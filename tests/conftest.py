@@ -54,6 +54,18 @@ def git_project(make_project: ProjectFactory) -> ProjectFactory:
     return factory
 
 
+@pytest.fixture
+def finding_ids(make_project: ProjectFactory) -> Callable[[dict[str, str]], set[str]]:
+    """Return a helper that scans a temporary project and yields finding IDs."""
+    from reprocheck.scanner import scan
+
+    def helper(files: dict[str, str], name: str = "example") -> set[str]:
+        root = make_project(files, name=name)
+        return {finding.id for finding in scan(root).findings}
+
+    return helper
+
+
 def run_git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     """Run a Git command inside ``root`` (test setup only)."""
     return subprocess.run(
