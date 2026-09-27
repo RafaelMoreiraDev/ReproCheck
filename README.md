@@ -28,10 +28,10 @@ ReproCheck separates three layers, and never mixes them:
 A check is a pure function of the facts. It cannot read the filesystem, run code
 or guess: if a conclusion cannot be proven, no finding is emitted.
 
-## Every version so far is strictly read-only
+## `scan` is strictly read-only
 
-This is a hard guarantee, not a best effort. When scanning a project, ReproCheck
-**never**:
+This is a hard guarantee, not a best effort. When **scanning** a project,
+ReproCheck **never**:
 
 - modifies, creates or deletes any file inside the analysed project;
 - installs dependencies or creates a `.venv`;
@@ -40,12 +40,16 @@ This is a hard guarantee, not a best effort. When scanning a project, ReproCheck
 - downloads files or performs any network request;
 - changes Git state (no `checkout`, `reset`, `clean`, `commit`, no hooks).
 
-The only write ReproCheck performs is the JSON report, at the exact path you
+The only write `scan` performs is the JSON report, at the exact path you
 choose (by default `./reprocheck-report.json`, in your current directory).
 
 Git is inspected with read-only commands only (`rev-parse`, `status
 --porcelain`), executed with `--no-optional-locks` so that even the Git index is
 left untouched.
+
+`reproduce` is the single exception: it executes the project's build backend on
+a **copy**, in a workspace outside the project, and the original is verified
+before and after. See "Reproduce" below and `docs/reproduction-safety.md`.
 
 ## Install for development
 
@@ -61,23 +65,25 @@ python -m pip install -e ".[dev]"
 
 ```powershell
 reprocheck scan C:\Projetos\some-project
+reprocheck reproduce C:\Projetos\some-project
 ```
 
 or, without installing the console script:
 
 ```powershell
 python -m reprocheck scan C:\Projetos\some-project
+python -m reprocheck reproduce C:\Projetos\some-project
 ```
 
-Options:
+`scan` options:
 
 | Option | Description |
 | --- | --- |
 | `--json <arquivo>` | Report destination. Default: `./reprocheck-report.json` |
 | `--verbose` | Also print HEAD, package manager hints and README commands |
 
-Exit codes: `0` success, `1` report could not be written, `2` usage error or
-unreadable path.
+Exit codes: `0` success, `1` the report could not be written or `reproduce`
+produced an error-severity finding, `2` usage error or unreadable path.
 
 ### Example
 
@@ -149,7 +155,7 @@ Report:
 
 ```json
 {
-  "reprocheck_version": "0.4.0",
+  "reprocheck_version": "0.5.0",
   "report_schema_version": "3",
   "scan_timestamp": "2026-01-01T12:00:00+00:00",
   "project": { "name": "example", "path": "C:\\Projetos\\example", "python_file_count": 3 },
@@ -209,13 +215,30 @@ Report:
       "is_mutable": true
     }
   ],
+  "reproduction": {
+    "attempted": true,
+    "workspace": null,
+    "workspace_kept": false,
+    "source": "C:\\Users\\you\\AppData\\Local\\Temp\\reprocheck\\<run-id>\\source",
+    "original_project": "C:\\Projetos\\example",
+    "network_enabled": false,
+    "python": { "selected": "3.11.9", "executable": "C:\\Python311\\python.exe", "reason": "lowest installed version satisfying >=3.11" },
+    "venv": { "path": "...\\venv", "python_version": "3.11.9", "initial_pip_version": "pip 24.0", "created": true },
+    "installation": { "strategy": "project", "command": ["python", "-m", "pip", "install"], "exit_code": 0, "success": true, "stdout_path": ".../logs/install.stdout.log" },
+    "pip_check": { "ran": true, "clean": true, "conflict_count": 0, "conflicts": [] },
+    "original_project_unchanged": true,
+    "integrity": { "git_head_before": "9f1c2b7", "git_head_after": "9f1c2b7", "tracked_files": 221, "changed_paths": [] },
+    "completed_steps": ["static scan", "workspace created", "project copied", "venv created", "installation succeeded", "pip check completed"]
+  },
   "facts": { "package_manager_signals": [], "readme_references": [], "absolute_paths": [], "file_references": [], "tools": [], "gitignore": {}, "project_metadata": {} }
 }
 ```
 
-`report_schema_version` is `"3"`: V0.3 added the `dependencies` section and V0.4
-added `workflow_references`. The V0.1 and V0.2 keys are unchanged, and V0.2 only
-added `report_schema_version`, `facts` and `confidence` inside each finding.
+`report_schema_version` is `"4"`: V0.3 added the `dependencies` section, V0.4
+added `workflow_references` and V0.5 added the optional `reproduction` section,
+which only appears when `reproduce` was run. The V0.1 and V0.2 keys are
+unchanged, and V0.2 only added `report_schema_version`, `facts` and `confidence`
+inside each finding.
 
 Every Python version declaration is always recorded separately, per source.
 Which one wins is never decided: the checks only state whether the declarations
@@ -333,6 +356,66 @@ Every finding carries `confidence`, derived from objective criteria only:
 Severities never imply a bug verdict. A `warning` means "this deserves a human
 look", not "this is broken".
 
+## Reproduce: a controlled installation attempt
+
+`scan` never executes anything from the project. `reproduce` does, inside an
+isolated temporary workspace:
+
+```powershell
+reprocheck reproduce C:\Projetos\some-project
+reprocheck reproduce C:\Projetos\some-project --network --keep-workspace
+```
+
+| Option | Effect |
+| --- | --- |
+| `--network` | Allow the **installation step only** to reach a package index. Off by default: `pip` runs with `--no-index` |
+| `--keep-workspace` | Keep the temporary workspace even after a successful attempt |
+| `--json <arquivo>` | Report destination, as in `scan` |
+| `--verbose` | Print the steps taken and the log locations |
+
+The pipeline is:
+
+```
+static scan → isolated workspace (copy) → Python selection → virtual environment
+→ installation → pip check → integrity verification of the original project
+```
+
+The project is **copied** to `<TEMP>/reprocheck/<run-id>/source`, excluding
+`.git`, environments, caches and build output. The virtual environment is
+created at `<TEMP>/reprocheck/<run-id>/venv`, never inside the project. Before
+and after the attempt, the size and mtime of every file plus the Git HEAD and
+status are compared: any change is reported as **RC406**, an error about
+ReproCheck itself.
+
+Installation strategies, in order:
+
+| Strategy | Command | When |
+| --- | --- | --- |
+| `project` | `pip install <workspace>/source` | the project declares a distribution (PEP 621, Poetry or setup.py). Non-editable on purpose: it exercises the declared build backend |
+| `requirements` | `pip install -r <workspace>/source/requirements.txt` | no installable project, but a `requirements.txt` exists |
+| none | — | neither: the attempt stops with RC403 instead of guessing |
+
+Workspace cleanup: a successful attempt is deleted, a failed one is kept because
+that is where the evidence lives, and `--keep-workspace` always keeps it.
+
+**A virtual environment is not a security sandbox.** Installing a project runs
+its build backend with the current user's privileges. Read
+`docs/reproduction-safety.md` before running `reproduce` on anything you would
+not `pip install` yourself.
+
+### Reproduction findings
+
+| ID | Severity | Confidence | Rule |
+| --- | --- | --- | --- |
+| RC400 | error | high | `pip check` reported at least one conflict in the reproduced environment |
+| RC401 | error | high | The installation failed; the command, exit code, log path and a short error excerpt are reported |
+| RC402 | error | high | The required Python version is not installed locally |
+| RC403 | warning | high | Neither an installable project nor a `requirements.txt` was found |
+| RC404 | info | high | The install output proves the dependencies were not available locally, so `--network` is required |
+| RC405 | error | high | The Python version could not be selected deterministically |
+| RC406 | error | high | The analysed project changed during the attempt (a ReproCheck error) |
+| RC407 | error | high | The virtual environment could not be created |
+
 ## Development
 
 ```powershell
@@ -348,8 +431,9 @@ implementation.
 
 ## Benchmark
 
-`docs/benchmark-openclimatefix.md` records how V0.2 performs against a real
-external repository, including the problems it does **not** detect.
+`docs/benchmark-openclimatefix.md` records how each version performs against a
+real external repository, including the problems it does **not** detect, and
+`docs/reproduction-safety.md` documents the isolation model and its limits.
 
 ## Current limitations
 
@@ -360,9 +444,6 @@ external repository, including the problems it does **not** detect.
 - Poetry constraints are translated to PEP 440 (`^`, `~`), but Poetry-specific
   sources (git dependencies, path dependencies, multiple constraints) are not
   modelled.
-- Constraint intersection is decided by testing a finite set of candidate
-  versions derived from the declarations themselves. A pair involving `!=` is
-  never reported as impossible, only as divergent.
 - Workflow parsing is line-based; YAML anchors, multi-line values and
   `env`-based indirection are not resolved.
 - README extraction is textual; it records commands, it does not interpret
@@ -372,24 +453,34 @@ external repository, including the problems it does **not** detect.
   files are ignored.
 - Path scanning is regex-based over `.py`, `.toml`, `.yaml`, `.yml`, `.json`,
   `.ini` and `.cfg` files; references built at runtime are not resolved.
-- Dependency findings prove that two declarations disagree, never that an
-  install would fail: nothing is resolved, installed or downloaded.
-- CI references are read line by line: YAML anchors, multi-line values and
-  `uses:` inside expressions are not resolved, and a job name is only recognised
-  at low indentation with the usual inner keys excluded.
+- Static findings prove that two declarations disagree, never that an install
+  would fail. Only `reproduce` answers the second question, and it does so by
+  installing.
 - Incompatibility is only claimed with a proof. Complex operators (`~=`,
   wildcards, `!=` combinations, prerelease exclusions) may stay undecided, and an
   undecided pair is reported as info, never as an error.
 - Nothing compares a CI ref with a known-good value, and no remote is queried to
   check whether a commit or tag still exists.
+- `reproduce` stops after `pip check`: there is no import smoke test, no test
+  discovery and no test execution yet.
+- `reproduce` copies the project without `.git`, so a version derived from Git
+  tags cannot be reproduced. The declaration is visible statically
+  (`dynamic = ["version"]` plus a Git-based version provider) but no check
+  reports it.
+- Installation time is bounded (30 minutes by default) and a timeout is reported
+  as a failure with exit code 124.
+- A virtual environment isolates versions, not authority. `reproduce` runs
+  untrusted build backends with the current user's privileges.
 - Findings are objective observations only — no reproducibility verdict, no
   scoring, no ranking of problems.
-- No AI, no network, no sandbox, no auto-fix.
+- No AI and no auto-fix. The network is only used by an explicit `--network`
+  during installation.
 
 ## Roadmap
 
-- `0.5` — `setup.cfg`, `Pipfile` and Conda dependency sources, plus PEP 735
-  `include-group` resolution.
-- `0.6` — baseline reports: store a report and diff it against a new scan to
+- `0.6` — import smoke test and test discovery in the reproduced environment,
+  plus a static check for versions that depend on Git metadata.
+- `0.7` — baseline reports: store a report and diff it against a new scan to
   show reproducibility drift over time.
-- `0.7` — non-Python ecosystems (Node) and richer documentation parsing.
+- `0.8` — `setup.cfg`, `Pipfile` and Conda dependency sources, PEP 735
+  `include-group` resolution, and non-Python ecosystems (Node).

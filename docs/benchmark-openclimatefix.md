@@ -5,7 +5,7 @@ repository and is never modified: ReproCheck only reads it.
 
 - Target: `C:\Projetos\OpenClimateFix\open-source-quartz-solar-forecast`
 - Commit scanned: `c07ad7402598979a7cd3c2eab7430098a3d56e78` (branch `main`, clean)
-- ReproCheck version: `0.4.0` (TASK-003)
+- ReproCheck version: `0.5.0` (TASK-003)
 - Date: 2026-09-26
 
 The `OCF-Bxx` list below is an **external benchmark only**. It was reconstructed by
@@ -25,7 +25,7 @@ ReproCheck implements it today:
 | --- | --- |
 | `static` | Provable by reading files, with no execution, network or domain knowledge |
 | `static (partial)` | The declaration can be read, but proving the consequence needs more |
-| `requires environment execution` | Needs an interpreter, an install or a test run |
+| `environment execution` | Needs a virtual environment and an installation, no network required beyond the package index |
 | `requires network` | Needs a registry, a remote repository or a download |
 | `requires semantic interpretation` | Needs a human judgement about intent |
 
@@ -50,9 +50,9 @@ ReproCheck implements it today:
 **Score: 7 fully detected (OCF-B01, OCF-B02, OCF-B03, OCF-B04, OCF-B06, OCF-B07,
 OCF-B08), 1 partial (OCF-B13), 5 not detected.**
 
-Five of the remaining cases are `static`, so they remain reachable without
-execution, network or domain knowledge; OCF-B09 needs semantics, OCF-B10 needs a
-build and OCF-B11 needs the network.
+Four of the remaining cases are `static` or `static (partial)`, so they remain
+reachable without execution; OCF-B09 needs semantics and OCF-B11 needs the
+network.
 
 ## Dependency audit (V0.3)
 
@@ -127,6 +127,57 @@ RC220  .../python-test.yml                                  @issue/pip-all
 RC220  .../tagged_ci.yml                                    @main
 ```
 
+## Reproduction attempt (V0.5)
+
+Two real attempts, both read-only for the target. No dataset was downloaded, no
+evaluation, no training, no Hugging Face access: only environment installation.
+
+### Without network (default)
+
+```
+python selected  3.11.16   lowest installed version matching .python-version 3.11
+venv             <TEMP>/reprocheck/<run-id>/venv   (python 3.11.16, pip 24.0)
+strategy         project   (pip install <workspace>/source)
+install          exit 1 after 6.1s
+pip check        not run
+unchanged        yes (221 tracked files, 0 changed paths)
+workspace        kept (failure policy)
+```
+
+Findings: `RC401` (installation failed) and `RC404` (the output proves the
+dependencies were not available locally: `No matching distribution found for
+setuptools>=67`, the build requirement of `[build-system]`). The attempt stopped
+there, deterministically and without touching the target.
+
+### With `--network`
+
+```
+python selected  3.11.16
+venv             <TEMP>/reprocheck/<run-id>/venv   (python 3.11.16, pip 24.0)
+strategy         project
+install          exit 0 after 257s, quartz_solar_forecast installed
+pip check        clean, 0 conflicts
+unchanged        yes
+workspace        removed (success policy)
+```
+
+Findings: **none**. The 15 declared runtime dependencies resolved and installed,
+and `pip check` found no conflict in the reproduced environment.
+
+Two observations that the reproduction produced and static analysis does not:
+
+1. **The version became `0.0.1`.** `dynamic = ["version"]` is provided by
+   `setuptools-git-versioning`, but the copy deliberately excludes `.git`, so the
+   version could not be derived from a tag. This is the practical consequence of
+   OCF-B10, observed rather than proven: the declared version is not derivable
+   from a source tree without Git history. ReproCheck has no static check for it
+   yet.
+2. **The five unpinned dependencies installed without conflict** (`typer-0.27.2`,
+   `uvicorn-0.54.0`, `httpx`, `pydantic-settings-2.2.1`, `async-timeout`), and
+   `pyresample-1.34.2` arrived as a transitive dependency of `pv-site-prediction`.
+   OCF-B04 and OCF-B06 are therefore real risks that did not materialise here,
+   exactly as their `info`/`warning` severities claim.
+
 ## Findings actually produced
 
 ```
@@ -174,4 +225,8 @@ directory is created by the clone.
 ## Read-only verification
 
 `git status --porcelain` returned 0 lines and `HEAD` remained
-`c07ad7402598979a7cd3c2eab7430098a3d56e78` before and after the scan.
+`c07ad7402598979a7cd3c2eab7430098a3d56e78` before and after every scan and every
+reproduction attempt, including the one that installed 80 packages.
+
+See `docs/reproduction-safety.md` for what the reproduction does and does not
+isolate.

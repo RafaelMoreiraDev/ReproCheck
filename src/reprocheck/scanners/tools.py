@@ -83,7 +83,7 @@ def _pyproject_tools(path: Path) -> list[tuple[str, str, str]]:
     if not path.is_file():
         return []
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8", errors="replace"))
+        data = tomllib.loads(path.read_text(encoding="utf-8-sig", errors="replace"))
     except (OSError, tomllib.TOMLDecodeError, ValueError):
         return []
     found: list[tuple[str, str, str]] = []
@@ -119,7 +119,7 @@ def _requirement_tools(root: Path) -> list[tuple[str, str, str]]:
         if not path.is_file():
             continue
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             continue
         for raw in text.splitlines():

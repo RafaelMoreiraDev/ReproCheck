@@ -41,10 +41,12 @@ class ScanReport:
     facts: dict[str, object] = field(default_factory=dict)
     dependencies: dict[str, object] = field(default_factory=dict)
     workflow_references: list[dict[str, object]] = field(default_factory=list)
+    reproduction: dict[str, object] = field(default_factory=dict)
+    reproduction_findings: list[Finding] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         """Return a deterministic, JSON-serialisable representation."""
-        return {
+        data: dict[str, object] = {
             "reprocheck_version": self.reprocheck_version,
             "report_schema_version": self.report_schema_version,
             "scan_timestamp": self.scan_timestamp,
@@ -70,9 +72,17 @@ class ScanReport:
             ],
             "findings": [
                 item.to_dict()
-                for item in _sorted(self.findings, "id", "category", "message")
+                for item in _sorted(
+                    self.findings + self.reproduction_findings,
+                    "id",
+                    "category",
+                    "message",
+                )
             ],
             "dependencies": self.dependencies,
             "workflow_references": self.workflow_references,
-            "facts": self.facts,
         }
+        if self.reproduction:
+            data["reproduction"] = self.reproduction
+        data["facts"] = self.facts
+        return data

@@ -37,7 +37,7 @@ def scan_python_requirements(root: Path) -> list[PythonRequirement]:
 
 def _read_text(path: Path) -> str | None:
     try:
-        return path.read_text(encoding="utf-8", errors="replace")
+        return path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return None
 

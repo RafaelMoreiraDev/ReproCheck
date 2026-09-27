@@ -51,7 +51,7 @@ def scan_paths(root: Path) -> tuple[list[AbsolutePathRef], list[FileReference]]:
 
     for relative, absolute_path in _iter_text_files(root):
         try:
-            text = absolute_path.read_text(encoding="utf-8", errors="replace")
+            text = absolute_path.read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             continue
         if "\x00" in text:

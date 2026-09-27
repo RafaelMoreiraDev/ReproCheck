@@ -186,7 +186,7 @@ def _is_safe_value(value: str) -> bool:
 
 def _scan_blocks(path: Path, relative: str) -> list[list[ReadmeCommand]]:
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return []
 

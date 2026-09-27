@@ -22,7 +22,7 @@ def scan_gitignore(root: Path) -> GitignoreInfo:
     if not path.is_file():
         return GitignoreInfo(exists=False)
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return GitignoreInfo(exists=False)
     return GitignoreInfo(exists=True, patterns=tuple(_parse(text)))

@@ -33,8 +33,8 @@ from reprocheck.scanners import (
 from reprocheck.scanners.dependencies import DependencyScan
 from reprocheck.scanners.project import scan_project
 
-#: Bumped to "3" in V0.4, when the ``workflow_references`` section was added.
-REPORT_SCHEMA_VERSION = "3"
+#: Bumped to "4" in V0.5, when the ``reproduction`` section was added.
+REPORT_SCHEMA_VERSION = "4"
 
 
 class ScanError(Exception):
@@ -48,9 +48,11 @@ def utc_timestamp() -> str:
 
 def scan(path: str | Path) -> ScanReport:
     """Scan ``path`` in read-only mode and return a :class:`ScanReport`."""
-    root = _resolve_target(path)
-    facts = collect_facts(root)
+    return build_report(collect_facts(_resolve_target(path)))
 
+
+def build_report(facts: Facts) -> ScanReport:
+    """Assemble the report from facts, without touching the filesystem."""
     return ScanReport(
         reprocheck_version=__version__,
         scan_timestamp=utc_timestamp(),

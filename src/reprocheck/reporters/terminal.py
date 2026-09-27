@@ -91,10 +91,71 @@ def format_report(report: ScanReport, output: str, verbose: bool = False) -> str
     lines.append("")
     lines.extend(_ci_reference_section(report))
     lines.extend(_findings_section(ci_references, title="CI findings"))
+    if report.reproduction:
+        lines.append("")
+        lines.extend(_reproduction_section(report, verbose=verbose))
     lines.append("")
     lines.append("Report:")
     lines.append(f"  {output}")
     return "\n".join(lines)
+
+
+def _reproduction_section(report: ScanReport, *, verbose: bool) -> list[str]:
+    data = report.reproduction
+    integrity = data.get("integrity") or {}
+    installation = data.get("installation") or {}
+    pip_check = data.get("pip_check") or {}
+    venv = data.get("venv") or {}
+    selection = data.get("python") or {}
+
+    lines = ["Reproduction"]
+    lines.append(f"  attempted: {_yes_no(bool(data.get('attempted')))}")
+    lines.append(
+        f"  network: {'enabled' if data.get('network_enabled') else 'disabled'}"
+    )
+    lines.append(
+        f"  python: {selection.get('selected') or '-'} "
+        f"({selection.get('reason') or 'no selection'})"
+    )
+    if venv:
+        lines.append(f"  venv: {venv.get('path') or '-'}")
+    if installation:
+        lines.append(
+            f"  strategy: {installation.get('strategy')} "
+            f"(exit {installation.get('exit_code')}, "
+            f"{installation.get('duration_seconds')}s)"
+        )
+        lines.append(f"  cwd: {installation.get('cwd')}")
+    if pip_check:
+        lines.append(
+            f"  pip check: "
+            f"{'clean' if pip_check.get('clean') else pip_check.get('conflict_count') or 'not run'}"
+        )
+    lines.append(
+        f"  original project unchanged: "
+        f"{_yes_no(bool(data.get('original_project_unchanged')))}"
+    )
+    lines.append(
+        f"  workspace: {data.get('workspace') or 'removed'}"
+        + (" (kept)" if data.get("workspace_kept") else "")
+    )
+    if verbose:
+        lines.append(f"  source copy: {data.get('source')}")
+        if installation:
+            lines.append(f"  install log: {installation.get('stderr_path')}")
+        if pip_check:
+            lines.append(f"  pip check log: {pip_check.get('stdout_path')}")
+        steps = data.get("completed_steps") or []
+        if steps:
+            lines.append("  steps:")
+            lines.extend(f"    - {step}" for step in steps)
+    if integrity.get("changed_paths"):
+        lines.append("  changed paths:")
+        lines.extend(f"    - {item}" for item in integrity["changed_paths"][:10])  # type: ignore[index]
+    lines.extend(
+        _findings_section(report.reproduction_findings, title="Reproduction findings")
+    )
+    return lines
 
 
 def _ci_reference_section(report: ScanReport) -> list[str]:

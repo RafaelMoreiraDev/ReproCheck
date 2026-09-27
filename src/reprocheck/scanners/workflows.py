@@ -37,7 +37,7 @@ def scan_workflow_references(root: Path) -> list[WorkflowReference]:
     for relative in scan_workflow_files(root):
         path = root / relative
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             continue
         found.extend(_parse_workflow(relative, text))
