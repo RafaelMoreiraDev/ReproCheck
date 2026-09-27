@@ -19,7 +19,9 @@ RC404_NETWORK_REQUIRED = "RC404"
 RC405_PYTHON_AMBIGUOUS = "RC405"
 RC406_ORIGINAL_MODIFIED = "RC406"
 RC407_VENV_FAILED = "RC407"
-RC408_OFFLINE_SANDBOX_OK = "RC408"
+RC500_IMPORT_FAILED = "RC500"
+RC501_TEST_COLLECTION_FAILED = "RC501"
+RC502_IMPORT_TIMEOUT = "RC502"
 
 CATEGORY = "reproduction"
 
@@ -35,7 +37,82 @@ def check_reproduction(
         *_venv_findings(report),
         *_installation_findings(report),
         *_pip_check_findings(report),
+        *_import_findings(report),
+        *_collection_findings(report),
         *_integrity_findings(report),
+    ]
+
+
+def _import_findings(report: ReproductionReport) -> list[Finding]:
+    """One finding per module that could not be imported."""
+    findings: list[Finding] = []
+    for check in report.imports:
+        if check.imported:
+            continue
+        if check.timed_out:
+            findings.append(
+                Finding(
+                    id=RC502_IMPORT_TIMEOUT,
+                    title="Module import timed out",
+                    severity=Severity.ERROR,
+                    category=CATEGORY,
+                    message=(
+                        f"Importing '{check.module}' did not finish within the "
+                        f"per-module timeout ({check.duration_seconds}s elapsed) "
+                        "and the process tree was terminated."
+                    ),
+                    evidence=(f"module: {check.module} | log: {check.stderr_path}"),
+                    confidence=Confidence.HIGH,
+                )
+            )
+            continue
+        findings.append(
+            Finding(
+                id=RC500_IMPORT_FAILED,
+                title="Installed module could not be imported",
+                severity=Severity.ERROR,
+                category=CATEGORY,
+                message=(
+                    f"The installed distribution provides the top-level module "
+                    f"'{check.module}', but importing it failed with exit code "
+                    f"{check.exit_code}."
+                ),
+                evidence=(
+                    f"module: {check.module} | log: {check.stderr_path} | "
+                    f"{check.error or ''}"
+                ),
+                confidence=Confidence.HIGH,
+            )
+        )
+    return findings
+
+
+def _collection_findings(report: ReproductionReport) -> list[Finding]:
+    collection = report.test_collection
+    if not collection.available or not collection.ran or collection.success:
+        return []
+    collected = (
+        f"{collection.collected} item(s) collected"
+        if collection.collected is not None
+        else "the number of collected items could not be parsed"
+    )
+    return [
+        Finding(
+            id=RC501_TEST_COLLECTION_FAILED,
+            title="Test collection failed in the reproduced environment",
+            severity=Severity.WARNING,
+            category=CATEGORY,
+            message=(
+                "pytest is installed in the reproduced environment but "
+                f"'--collect-only' failed with exit code {collection.exit_code} "
+                f"({collected}). Tests were not executed."
+            ),
+            evidence=(
+                f"log: {collection.stdout_path or collection.stderr_path} | "
+                f"{collection.stderr_snippet or collection.stdout_snippet}"
+            ),
+            confidence=Confidence.HIGH,
+        )
     ]
 
 

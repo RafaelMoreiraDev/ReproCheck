@@ -5,7 +5,7 @@ repository and is never modified: ReproCheck only reads it.
 
 - Target: `C:\Projetos\OpenClimateFix\open-source-quartz-solar-forecast`
 - Commit scanned: `c07ad7402598979a7cd3c2eab7430098a3d56e78` (branch `main`, clean)
-- ReproCheck version: `0.5.0` (TASK-003)
+- ReproCheck version: `0.6.0` (TASK-003)
 - Date: 2026-09-26
 
 The `OCF-Bxx` list below is an **external benchmark only**. It was reconstructed by
@@ -42,15 +42,15 @@ ReproCheck implements it today:
 | OCF-B07 | `.gitignore` covers `venv` but not `.venv`, the layout uv actually creates | static | **Yes** | RC140 | Listed among the uncovered patterns |
 | OCF-B08 | `.gitignore` does not cover `.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`, `build/`, `dist/` although those tools are configured | static | **Yes** | RC140 | Each pattern required by objective tool evidence |
 | OCF-B09 | Required data is gitignored and absent (`quartz_solar_forecast/data`, `.../dataset/TZ-SAM/data`, `scripts/datapipes/*`) | requires semantic interpretation | No | — | Data provenance; would also need the network to verify a source |
-| OCF-B10 | Version is dynamic from Git tags (`dynamic = ["version"]`, `dirty_template = "{tag}"`), so a dirty tree reuses the release version | static (partial) | No | — | The declaration is readable; proving the collision needs a build |
+| OCF-B10 | Version is dynamic from Git tags (`dynamic = ["version"]`, `dirty_template = "{tag}"`), so a dirty tree reuses the release version | static (partial) | **Partial** (V0.6) | RC150 | RC150 proves the version is derived from Git/VCS metadata and that a reproduction copy cannot derive it; the reproduction then measured the consequence (`0.0.1`). The "dirty tree reuses the release version" half still needs a build, so this is not a full detection |
 | OCF-B11 | `scripts/download_tz-sam.py` downloads a quarterly ZIP from a hardcoded URL with no checksum | requires network | No | — | The missing checksum is static, but the artifact itself is not inspected |
 | OCF-B12 | Python version consistency | static | n/a | RC100 | Not a problem: 6 declarations, all consistent with `>=3.11` |
 | OCF-B13 | `python-version: "['3.11']"` stringified list and `test_python_versions` env inputs to a reusable workflow | static | Partial | — | The value is parsed (3.11); the fragile convention itself is still not flagged |
 
 **Score: 7 fully detected (OCF-B01, OCF-B02, OCF-B03, OCF-B04, OCF-B06, OCF-B07,
-OCF-B08), 1 partial (OCF-B13), 5 not detected.**
+OCF-B08), 2 partial (OCF-B10, OCF-B13), 4 not detected.**
 
-Four of the remaining cases are `static` or `static (partial)`, so they remain
+Three of the remaining cases are `static` or `static (partial)`, so they remain
 reachable without execution; OCF-B09 needs semantics and OCF-B11 needs the
 network.
 
@@ -169,14 +169,40 @@ Two observations that the reproduction produced and static analysis does not:
 1. **The version became `0.0.1`.** `dynamic = ["version"]` is provided by
    `setuptools-git-versioning`, but the copy deliberately excludes `.git`, so the
    version could not be derived from a tag. This is the practical consequence of
-   OCF-B10, observed rather than proven: the declared version is not derivable
-   from a source tree without Git history. ReproCheck has no static check for it
-   yet.
+   OCF-B10, now reported statically by RC150 and measured by the reproduction.
 2. **The five unpinned dependencies installed without conflict** (`typer-0.27.2`,
    `uvicorn-0.54.0`, `httpx`, `pydantic-settings-2.2.1`, `async-timeout`), and
    `pyresample-1.34.2` arrived as a transitive dependency of `pv-site-prediction`.
    OCF-B04 and OCF-B06 are therefore real risks that did not materialise here,
    exactly as their `info`/`warning` severities claim.
+
+### With `--network --runtime-checks` (V0.6)
+
+A second attempt, again installation only: no dataset, no evaluation, no
+training, no Hugging Face access, and no test execution.
+
+```
+python selected    3.11.16
+install            exit 0 after 279s
+installed          quartz_solar_forecast 0.0.1  (flagged as a fallback)
+pip check          clean
+import discovery   3 candidates, none invented
+imports            api OK | dashboards OK | quartz_solar_forecast OK
+pytest collection  not run: pytest is not installed in the reproduced venv
+unchanged          yes (221 tracked files, 0 changed paths)
+```
+
+Findings: **no RC500, no RC501, no RC502**. The import smoke test imported all
+three top-level packages the distribution actually ships. Collection was
+skipped without an error, because `pytest` is a development dependency and
+`pip install <source>` installs runtime dependencies only — ReproCheck does not
+install pytest to make the step possible.
+
+The three top-level names come from `importlib.metadata`, not from the
+distribution name: `quartz_solar_forecast` is the distribution, and the wheel
+ships `api/`, `dashboards/` and `quartz_solar_forecast/` as separate importable
+packages. All three imported cleanly, so the package layout is coherent; the
+version is not.
 
 ## Findings actually produced
 

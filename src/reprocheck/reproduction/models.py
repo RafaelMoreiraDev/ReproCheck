@@ -177,6 +177,84 @@ class PipCheckResult:
 
 
 @dataclass(frozen=True, slots=True)
+class InstalledDistribution:
+    """The distribution installed in the reproduced environment."""
+
+    name: str | None = None
+    version: str | None = None
+    looks_like_fallback: bool = False
+    note: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "version": self.version,
+            "looks_like_fallback": self.looks_like_fallback,
+            "note": self.note,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ImportCheck:
+    """One ``import <module>`` attempt inside the reproduced venv."""
+
+    module: str
+    imported: bool = False
+    exit_code: int | None = None
+    duration_seconds: float | None = None
+    timed_out: bool = False
+    stderr_snippet: str = ""
+    stdout_path: str | None = None
+    stderr_path: str | None = None
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "module": self.module,
+            "imported": self.imported,
+            "exit_code": self.exit_code,
+            "duration_seconds": self.duration_seconds,
+            "timed_out": self.timed_out,
+            "stderr_snippet": self.stderr_snippet,
+            "stdout_path": self.stdout_path,
+            "stderr_path": self.stderr_path,
+            "error": self.error,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TestCollection:
+    """``pytest --collect-only`` inside the reproduced venv."""
+
+    available: bool = False
+    ran: bool = False
+    success: bool | None = None
+    exit_code: int | None = None
+    collected: int | None = None
+    duration_seconds: float | None = None
+    stdout_snippet: str = ""
+    stderr_snippet: str = ""
+    stdout_path: str | None = None
+    stderr_path: str | None = None
+    reason: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "available": self.available,
+            "ran": self.ran,
+            "success": self.success,
+            "exit_code": self.exit_code,
+            "collected": self.collected,
+            "duration_seconds": self.duration_seconds,
+            "stdout_snippet": self.stdout_snippet,
+            "stderr_snippet": self.stderr_snippet,
+            "stdout_path": self.stdout_path,
+            "stderr_path": self.stderr_path,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class FingerprintResult:
     """Comparison of the analysed project before and after the attempt."""
 
@@ -212,10 +290,17 @@ class ReproductionReport:
     source: str | None = None
     original_project: str | None = None
     network_enabled: bool = False
+    runtime_checks_enabled: bool = False
     python: PythonSelection = field(default_factory=PythonSelection)
     venv: VenvInfo = field(default_factory=VenvInfo)
     installation: InstallationAttempt | None = None
     pip_check: PipCheckResult = field(default_factory=PipCheckResult)
+    installed_distribution: InstalledDistribution = field(
+        default_factory=InstalledDistribution
+    )
+    imports: tuple[ImportCheck, ...] = ()
+    import_discovery: str | None = None
+    test_collection: TestCollection = field(default_factory=TestCollection)
     integrity: FingerprintResult = field(default_factory=FingerprintResult)
     completed_steps: tuple[str, ...] = ()
 
@@ -227,12 +312,20 @@ class ReproductionReport:
             "source": self.source,
             "original_project": self.original_project,
             "network_enabled": self.network_enabled,
+            "runtime_checks_enabled": self.runtime_checks_enabled,
             "python": self.python.to_dict(),
             "venv": self.venv.to_dict(),
             "installation": (
                 self.installation.to_dict() if self.installation else None
             ),
             "pip_check": self.pip_check.to_dict(),
+            "installed_distribution": self.installed_distribution.to_dict(),
+            "runtime_checks": {
+                "enabled": self.runtime_checks_enabled,
+                "import_discovery": self.import_discovery,
+                "imports": [item.to_dict() for item in self.imports],
+                "pytest_collection": self.test_collection.to_dict(),
+            },
             "original_project_unchanged": self.integrity.unchanged,
             "integrity": self.integrity.to_dict(),
             "completed_steps": list(self.completed_steps),

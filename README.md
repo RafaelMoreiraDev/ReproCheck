@@ -155,7 +155,7 @@ Report:
 
 ```json
 {
-  "reprocheck_version": "0.5.0",
+  "reprocheck_version": "0.6.0",
   "report_schema_version": "3",
   "scan_timestamp": "2026-01-01T12:00:00+00:00",
   "project": { "name": "example", "path": "C:\\Projetos\\example", "python_file_count": 3 },
@@ -222,20 +222,29 @@ Report:
     "source": "C:\\Users\\you\\AppData\\Local\\Temp\\reprocheck\\<run-id>\\source",
     "original_project": "C:\\Projetos\\example",
     "network_enabled": false,
+    "runtime_checks_enabled": true,
     "python": { "selected": "3.11.9", "executable": "C:\\Python311\\python.exe", "reason": "lowest installed version satisfying >=3.11" },
     "venv": { "path": "...\\venv", "python_version": "3.11.9", "initial_pip_version": "pip 24.0", "created": true },
     "installation": { "strategy": "project", "command": ["python", "-m", "pip", "install"], "exit_code": 0, "success": true, "stdout_path": ".../logs/install.stdout.log" },
     "pip_check": { "ran": true, "clean": true, "conflict_count": 0, "conflicts": [] },
+    "installed_distribution": { "name": "example", "version": "1.2.3", "looks_like_fallback": false, "note": null },
+    "runtime_checks": {
+      "enabled": true,
+      "import_discovery": null,
+      "imports": [{ "module": "example", "imported": true, "exit_code": 0, "timed_out": false, "duration_seconds": 0.2 }],
+      "pytest_collection": { "available": false, "ran": false, "success": null, "collected": null, "reason": "pytest is not installed in the reproduced environment" }
+    },
     "original_project_unchanged": true,
     "integrity": { "git_head_before": "9f1c2b7", "git_head_after": "9f1c2b7", "tracked_files": 221, "changed_paths": [] },
-    "completed_steps": ["static scan", "workspace created", "project copied", "venv created", "installation succeeded", "pip check completed"]
+    "completed_steps": ["static scan", "workspace created", "project copied", "venv created", "installation succeeded", "pip check completed", "installed version: 1.2.3", "import smoke test: 1 candidate(s)"]
   },
-  "facts": { "package_manager_signals": [], "readme_references": [], "absolute_paths": [], "file_references": [], "tools": [], "gitignore": {}, "project_metadata": {} }
+  "facts": { "package_manager_signals": [], "readme_references": [], "absolute_paths": [], "file_references": [], "tools": [], "gitignore": {}, "project_metadata": { "name": "example", "dependencies": [], "dynamic_fields": [], "version_providers": [] } }
 }
 ```
 
-`report_schema_version` is `"4"`: V0.3 added the `dependencies` section, V0.4
-added `workflow_references` and V0.5 added the optional `reproduction` section,
+`report_schema_version` is `"5"`: V0.3 added the `dependencies` section, V0.4
+added `workflow_references`, V0.5 added the optional `reproduction` section and
+V0.6 added `runtime_checks` inside it.
 which only appears when `reproduce` was run. The V0.1 and V0.2 keys are
 unchanged, and V0.2 only added `report_schema_version`, `facts` and `confidence`
 inside each finding.
@@ -356,6 +365,17 @@ Every finding carries `confidence`, derived from objective criteria only:
 Severities never imply a bug verdict. A `warning` means "this deserves a human
 look", not "this is broken".
 
+### Version provenance (V0.6)
+
+| ID | Severity | Confidence | Rule |
+| --- | --- | --- | --- |
+| RC150 | warning | high | The distribution version is declared dynamic and provided from Git/VCS metadata, so a reproduction copy without `.git` cannot derive it |
+
+Providers detected: `setuptools-git-versioning`, `setuptools_scm`, `hatch-vcs`
+and `poetry-dynamic-versioning`, from `[build-system] requires` and from the
+corresponding `[tool.*]` sections. The check states the declaration, never that
+the build will fail.
+
 ## Reproduce: a controlled installation attempt
 
 `scan` never executes anything from the project. `reproduce` does, inside an
@@ -370,6 +390,7 @@ reprocheck reproduce C:\Projetos\some-project --network --keep-workspace
 | --- | --- |
 | `--network` | Allow the **installation step only** to reach a package index. Off by default: `pip` runs with `--no-index` |
 | `--keep-workspace` | Keep the temporary workspace even after a successful attempt |
+| `--runtime-checks` | Also import the installed modules and collect tests. **Executes project code**, so it is off by default |
 | `--json <arquivo>` | Report destination, as in `scan` |
 | `--verbose` | Print the steps taken and the log locations |
 
@@ -377,7 +398,9 @@ The pipeline is:
 
 ```
 static scan → isolated workspace (copy) → Python selection → virtual environment
-→ installation → pip check → integrity verification of the original project
+→ installation → pip check → installed version
+→ [import smoke test] → [pytest collection]        (only with --runtime-checks)
+→ integrity verification of the original project
 ```
 
 The project is **copied** to `<TEMP>/reprocheck/<run-id>/source`, excluding
@@ -399,9 +422,26 @@ Workspace cleanup: a successful attempt is deleted, a failed one is kept because
 that is where the evidence lives, and `--keep-workspace` always keeps it.
 
 **A virtual environment is not a security sandbox.** Installing a project runs
-its build backend with the current user's privileges. Read
-`docs/reproduction-safety.md` before running `reproduce` on anything you would
-not `pip install` yourself.
+its build backend with the current user's privileges, and `--runtime-checks`
+additionally imports the package and lets pytest execute `conftest.py`, plugins
+and test-module imports. Read `docs/reproduction-safety.md` before running
+`reproduce` on anything you would not `pip install` yourself.
+
+### Runtime checks
+
+With `--runtime-checks`, after a successful installation:
+
+1. the import target is **discovered**, never guessed from the distribution
+   name: `importlib.metadata` lists the files of the installed distribution and
+   the top-level modules are derived from them, discarding `.dist-info`,
+   `.data` and documentation or test directories. When no unambiguous candidate
+   exists, the report says so and no import is attempted;
+2. each candidate is imported in its own process with a 30 second timeout, and
+   the process tree is killed on timeout;
+3. the installed version is read with `importlib.metadata.version`;
+4. pytest collection runs **only if pytest is already installed in the
+   reproduced environment**. ReproCheck never installs it. Test functions are
+   never executed.
 
 ### Reproduction findings
 
@@ -415,6 +455,10 @@ not `pip install` yourself.
 | RC405 | error | high | The Python version could not be selected deterministically |
 | RC406 | error | high | The analysed project changed during the attempt (a ReproCheck error) |
 | RC407 | error | high | The virtual environment could not be created |
+| RC500 | error | high | An installed top-level module could not be imported |
+| RC501 | warning | high | `pytest --collect-only` failed. Warning, not error: it blocks the test suite but not the use of the package |
+| RC502 | error | high | A module import exceeded the per-module timeout |
+
 
 ## Development
 
@@ -461,12 +505,18 @@ real external repository, including the problems it does **not** detect, and
   undecided pair is reported as info, never as an error.
 - Nothing compares a CI ref with a known-good value, and no remote is queried to
   check whether a commit or tag still exists.
-- `reproduce` stops after `pip check`: there is no import smoke test, no test
-  discovery and no test execution yet.
+- `reproduce` stops after `pip check` plus the optional runtime steps: tests are
+  collected, never executed, and there is no plugin or marker configuration.
+- Import discovery only sees the files the distribution declares in
+  `importlib.metadata`. A namespace package spread over two wheels, a lazy
+  plugin registered at runtime, or an entry point that adds an import target are
+  all invisible to it.
+- Collection needs pytest already in the reproduced environment. Installing
+  development dependencies to enable the step is out of scope, so projects whose
+  runtime install excludes pytest skip the step silently.
 - `reproduce` copies the project without `.git`, so a version derived from Git
-  tags cannot be reproduced. The declaration is visible statically
-  (`dynamic = ["version"]` plus a Git-based version provider) but no check
-  reports it.
+  tags cannot be reproduced. RC150 reports the declaration, but there is no mode
+  that preserves Git metadata yet.
 - Installation time is bounded (30 minutes by default) and a timeout is reported
   as a failure with exit code 124.
 - A virtual environment isolates versions, not authority. `reproduce` runs
@@ -478,9 +528,10 @@ real external repository, including the problems it does **not** detect, and
 
 ## Roadmap
 
-- `0.6` — import smoke test and test discovery in the reproduced environment,
-  plus a static check for versions that depend on Git metadata.
-- `0.7` — baseline reports: store a report and diff it against a new scan to
+- `0.7` — an explicit opt-in mode that preserves Git metadata in the
+  reproduction copy, so a tag-derived version can be reproduced, plus entry
+  point based import discovery.
+- `0.8` — baseline reports: store a report and diff it against a new scan to
   show reproducibility drift over time.
-- `0.8` — `setup.cfg`, `Pipfile` and Conda dependency sources, PEP 735
+- `0.9` — `setup.cfg`, `Pipfile` and Conda dependency sources, PEP 735
   `include-group` resolution, and non-Python ecosystems (Node).

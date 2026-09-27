@@ -15,6 +15,7 @@ what is not, and why a virtual environment is not a security boundary.
 | Logs and report | Live under `<workspace>/logs` and the report destination chosen by the user |
 | Integrity | Size and mtime of every file, plus `git rev-parse HEAD` and `git status --porcelain`, are captured before and after. Any difference is reported as **RC406**, an error severity finding about ReproCheck itself |
 | README | Never executed. It stays evidence, never code |
+| Test execution | Never. Only `pytest --collect-only` runs, and only with `--runtime-checks` |
 
 Excluded from the copy: `.git`, `.hg`, `.svn`, `.venv`, `venv`, `env`,
 `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.tox`, `.nox`,
@@ -24,6 +25,45 @@ source is worse than one that fails.
 
 ## What is NOT isolated
 
+## What each step executes
+
+`reprocheck reproduce` runs, in this order: the analysis (read-only), then the
+installation. With `--runtime-checks` it runs two more steps, and both execute
+project code:
+
+### Installation
+
+`pip install <workspace>/source` runs the declared **PEP 517 build backend**.
+For a setuptools project that means executing `setup.py`; a third-party or
+in-tree backend can run any code it likes, and an sdist build may compile
+sources. This happens on every `reproduce`, with or without `--runtime-checks`.
+
+### Import smoke test (`--runtime-checks` only)
+
+`python -c "import <module>"` runs the installed package's `__init__.py` and
+anything it imports. A package that does work at import time — downloading
+data, opening sockets, reading the home directory, spawning processes — will do
+it here. Each import is a separate process with a 30 second timeout, and the
+whole process tree is killed when the timeout expires.
+
+### Pytest collection (`--runtime-checks` only)
+
+`python -m pytest --collect-only -q` runs:
+
+- `conftest.py` files, in full;
+- installed pytest plugins and their hooks;
+- the import of every test module;
+- module-level code in those test modules.
+
+Test functions are **not** executed, and no test is ever run by ReproCheck in
+V0.5 or V0.6. Collection is not a passive operation.
+
+### Consequence
+
+`--runtime-checks` should only be used on code you trust as much as code you
+would import, or inside a disposable container/VM. It is not a sandbox, and
+neither is the virtual environment.
+
 **A virtual environment is not a sandbox.** Running `pip install` on an
 untrusted project executes code with the full privileges of the current user:
 
@@ -31,6 +71,7 @@ untrusted project executes code with the full privileges of the current user:
   by setuptools, and an in-tree or third-party backend can do anything;
 - `pyproject.toml` can point at a backend that is downloaded and executed;
 - an sdist build compiles code and runs its own `setup.py`;
+- `--runtime-checks` adds module imports and pytest collection on top;
 - the installed code is then importable with the user's file access, network
   access and environment variables.
 
@@ -57,6 +98,9 @@ directories or opening sockets.
 | --- | --- |
 | default | `pip` runs with `--no-index` and `PIP_NO_INDEX=1`. Only what is already available locally can be installed |
 | `--network` | The index is reachable **for the installation step only**. No other request is made by ReproCheck, and the analysis stays offline |
+
+`--runtime-checks` does not open the network by itself. An imported module or a
+pytest plugin may still do it, which is exactly why the flag is opt-in.
 
 When an offline installation fails because the dependencies were not available
 locally, ReproCheck reports **RC404** — but only when the pip output proves it.

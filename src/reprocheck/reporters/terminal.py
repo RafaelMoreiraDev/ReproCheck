@@ -114,6 +114,10 @@ def _reproduction_section(report: ScanReport, *, verbose: bool) -> list[str]:
         f"  network: {'enabled' if data.get('network_enabled') else 'disabled'}"
     )
     lines.append(
+        f"  runtime checks: "
+        f"{'enabled' if data.get('runtime_checks_enabled') else 'disabled'}"
+    )
+    lines.append(
         f"  python: {selection.get('selected') or '-'} "
         f"({selection.get('reason') or 'no selection'})"
     )
@@ -135,6 +139,7 @@ def _reproduction_section(report: ScanReport, *, verbose: bool) -> list[str]:
         f"  original project unchanged: "
         f"{_yes_no(bool(data.get('original_project_unchanged')))}"
     )
+    lines.extend(_runtime_section(data))
     lines.append(
         f"  workspace: {data.get('workspace') or 'removed'}"
         + (" (kept)" if data.get("workspace_kept") else "")
@@ -174,6 +179,50 @@ def _ci_reference_section(report: ScanReport) -> list[str]:
         f"  local: {len(local)}",
         "",
     ]
+
+
+def _runtime_section(data: dict) -> list[str]:
+    """Installed version, import smoke test and test collection."""
+    distribution = data.get("installed_distribution") or {}
+    runtime_checks = data.get("runtime_checks") or {}
+    lines: list[str] = []
+    if distribution.get("version"):
+        note = (
+            " (looks like a fallback)"
+            if distribution.get("looks_like_fallback")
+            else ""
+        )
+        lines.append(
+            f"  installed: {distribution.get('name')} "
+            f"{distribution.get('version')}{note}"
+        )
+    if not runtime_checks.get("enabled"):
+        return lines
+
+    imports = runtime_checks.get("imports") or []
+    if imports:
+        for item in imports:
+            status = "ok" if item.get("imported") else "FAILED"
+            lines.append(f"  import {item.get('module')}: {status}")
+    else:
+        reason = runtime_checks.get("import_discovery") or "no target"
+        lines.append(f"  import target: not determined ({reason})")
+
+    collection = runtime_checks.get("pytest_collection") or {}
+    if not collection.get("available"):
+        lines.append("  pytest: not installed, collection skipped")
+    elif collection.get("ran"):
+        collected = collection.get("collected")
+        lines.append(
+            "  pytest collection: "
+            + (
+                "ok"
+                if collection.get("success")
+                else f"FAILED (exit {collection.get('exit_code')})"
+            )
+            + (f", {collected} item(s)" if collected is not None else "")
+        )
+    return lines
 
 
 def _dependency_section(report: ScanReport) -> list[str]:

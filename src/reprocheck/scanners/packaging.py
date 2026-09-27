@@ -286,9 +286,34 @@ class ProjectMetadata:
 
     name: str | None = None
     dependencies: tuple[str, ...] = ()
+    dynamic_fields: tuple[str, ...] = ()
+    version_providers: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
-        return {"name": self.name, "dependencies": list(self.dependencies)}
+        return {
+            "name": self.name,
+            "dependencies": list(self.dependencies),
+            "dynamic_fields": list(self.dynamic_fields),
+            "version_providers": list(self.version_providers),
+        }
+
+
+#: Version providers that read Git or VCS metadata to compute a version.
+GIT_VERSION_PROVIDERS = (
+    "setuptools-git-versioning",
+    "setuptools_scm",
+    "setuptools-scm",
+    "hatch-vcs",
+    "poetry-dynamic-versioning",
+    "vcs-versioning",
+)
+
+#: ``[tool.*]`` sections that configure a VCS-derived version.
+_VERSION_TOOL_SECTIONS = (
+    ("setuptools-git-versioning", "pyproject.toml [tool.setuptools-git-versioning]"),
+    ("setuptools_scm", "pyproject.toml [tool.setuptools_scm]"),
+    ("poetry-dynamic-versioning", "pyproject.toml [tool.poetry-dynamic-versioning]"),
+)
 
 
 def scan_project_metadata(root: Path) -> ProjectMetadata:
@@ -325,7 +350,48 @@ def scan_project_metadata(root: Path) -> ProjectMetadata:
     return ProjectMetadata(
         name=raw_name.strip() if isinstance(raw_name, str) else None,
         dependencies=tuple(declared),
+        dynamic_fields=_dynamic_fields(project),
+        version_providers=_version_providers(data, raw),
     )
+
+
+def _dynamic_fields(project: dict[str, object]) -> tuple[str, ...]:
+    dynamic = project.get("dynamic")
+    if not isinstance(dynamic, list):
+        return ()
+    return tuple(
+        item.strip() for item in dynamic if isinstance(item, str) and item.strip()
+    )
+
+
+def _version_providers(data: dict[str, object], declared: list[str]) -> tuple[str, ...]:
+    """Providers that compute the version from Git or other VCS metadata."""
+    candidates: list[str] = list(declared)
+    build_system = data.get("build-system")
+    if isinstance(build_system, dict):
+        requires = build_system.get("requires")
+        if isinstance(requires, list):
+            candidates.extend(item for item in requires if isinstance(item, str))
+
+    found: list[str] = []
+    for item in candidates:
+        name = item.split(";", 1)[0].split("[", 1)[0].strip()
+        base = re.split(r"[<>=!~\[\s;]", name, maxsplit=1)[0].strip().lower()
+        if base in GIT_VERSION_PROVIDERS and base not in found:
+            found.append(base)
+    tool = data.get("tool")
+    if isinstance(tool, dict):
+        for key, evidence in _VERSION_TOOL_SECTIONS:
+            if key in tool and evidence not in found:
+                found.append(evidence)
+        hatch = tool.get("hatch")
+        if isinstance(hatch, dict):
+            version = hatch.get("version")
+            if isinstance(version, dict) and version.get("source") == "vcs":
+                evidence = 'pyproject.toml [tool.hatch.version] source = "vcs"'
+                if evidence not in found:
+                    found.append(evidence)
+    return tuple(found)
 
 
 def _group_values(value: object) -> list[object]:

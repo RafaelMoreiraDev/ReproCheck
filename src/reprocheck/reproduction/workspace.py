@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import time
 import uuid
@@ -156,36 +157,14 @@ def run_command(
     """Run a command, streaming its output into the workspace log directory.
 
     The result keeps only truncated snippets; the full output stays in the
-    workspace, so the JSON report can never become a log dump.
+    workspace, so the JSON report can never become a log dump. On timeout the
+    whole process tree is killed, so no orphan is left behind.
     """
     logs.mkdir(parents=True, exist_ok=True)
     stdout_path = logs / f"{name}.stdout.log"
     stderr_path = logs / f"{name}.stderr.log"
     started = time.monotonic()
-    try:
-        with (
-            stdout_path.open("w", encoding="utf-8", errors="replace") as out,
-            stderr_path.open("w", encoding="utf-8", errors="replace") as err,
-        ):
-            completed = subprocess.run(  # noqa: S603
-                command,
-                cwd=str(cwd),
-                stdout=out,
-                stderr=err,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-                check=False,
-                env=env,
-            )
-        exit_code = completed.returncode
-    except subprocess.TimeoutExpired:
-        exit_code = 124
-        _append(stderr_path, f"reprocheck: command timed out after {timeout}s")
-    except OSError as exc:
-        exit_code = 127
-        _append(stderr_path, f"reprocheck: could not run command: {exc}")
+    exit_code = _spawn(command, cwd, env, stdout_path, stderr_path, timeout)
     duration = round(time.monotonic() - started, 3)
 
     return CommandResult(
@@ -197,6 +176,75 @@ def run_command(
         stdout_snippet=snippet(_read(stdout_path)),
         stderr_snippet=snippet(_read(stderr_path)),
     )
+
+
+TIMEOUT_EXIT_CODE = 124
+SPAWN_FAILURE_EXIT_CODE = 127
+
+
+def _spawn(
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str] | None,
+    stdout_path: Path,
+    stderr_path: Path,
+    timeout: int,
+) -> int:
+    """Run one command, killing the process tree on timeout."""
+    kwargs: dict[str, object] = {}
+    if os.name != "nt":
+        # A new session lets the whole tree be signalled at once.
+        kwargs["start_new_session"] = True
+    try:
+        with (
+            stdout_path.open("w", encoding="utf-8", errors="replace") as out,
+            stderr_path.open("w", encoding="utf-8", errors="replace") as err,
+        ):
+            process = subprocess.Popen(  # noqa: S603
+                command,
+                cwd=str(cwd),
+                stdout=out,
+                stderr=err,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                **kwargs,  # type: ignore[arg-type]
+            )
+            try:
+                return process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill_tree(process)
+                _append(
+                    stderr_path,
+                    f"reprocheck: command timed out after {timeout}s",
+                )
+                return TIMEOUT_EXIT_CODE
+    except OSError as exc:
+        _append(stderr_path, f"reprocheck: could not run command: {exc}")
+        return SPAWN_FAILURE_EXIT_CODE
+
+
+def _kill_tree(process: subprocess.Popen) -> None:
+    """Kill a command and its children, so nothing is left running."""
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(  # noqa: S603
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    else:
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except (OSError, ProcessLookupError):  # pragma: no cover - defensive
+            process.kill()
+    try:
+        process.wait(timeout=30)
+    except subprocess.TimeoutExpired:  # pragma: no cover - defensive
+        process.kill()
 
 
 def _append(path: Path, text: str) -> None:
@@ -211,6 +259,6 @@ def _read(path: Path) -> str:
         return ""
 
 
-def read_log(path: Path) -> str:
+def read_log(path: Path | str) -> str:
     """Read a workspace log file, returning an empty string when missing."""
-    return _read(path)
+    return _read(Path(path))

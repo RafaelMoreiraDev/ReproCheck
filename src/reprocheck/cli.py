@@ -77,6 +77,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="keep the temporary workspace even after a successful attempt",
     )
     reproduce_parser.add_argument(
+        "--runtime-checks",
+        action="store_true",
+        help=(
+            "also import the installed modules and collect tests; this executes "
+            "project code, so it is off by default"
+        ),
+    )
+    reproduce_parser.add_argument(
         "--verbose",
         action="store_true",
         help="print the reproduction steps and log locations",

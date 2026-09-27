@@ -33,8 +33,8 @@ from reprocheck.scanners import (
 from reprocheck.scanners.dependencies import DependencyScan
 from reprocheck.scanners.project import scan_project
 
-#: Bumped to "4" in V0.5, when the ``reproduction`` section was added.
-REPORT_SCHEMA_VERSION = "4"
+#: Bumped to "5" in V0.6, when ``runtime_checks`` was added to the reproduction.
+REPORT_SCHEMA_VERSION = "5"
 
 
 class ScanError(Exception):
@@ -120,6 +120,8 @@ def collect_facts(root: Path) -> Facts:
         tools=tools.scan_tools(root),
         distribution_name=metadata.name,
         declared_dependencies=_declared_names(dependency_scan.declarations),
+        dynamic_fields=metadata.dynamic_fields,
+        version_providers=metadata.version_providers,
         dependency_declarations=dependency_scan.declarations,
         requirement_includes=dependency_scan.includes,
         workflow_references=workflows.scan_workflow_references(root),

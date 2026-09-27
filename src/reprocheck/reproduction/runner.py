@@ -22,10 +22,11 @@ from pathlib import Path
 
 from reprocheck import __version__
 from reprocheck.checks.reproduction import check_reproduction
+from reprocheck.facts import Facts
 from reprocheck.models import ScanReport
 from reprocheck.reproduction import fingerprint as integrity
 from reprocheck.reproduction import installer as installation
-from reprocheck.reproduction import pip_check, python_selector
+from reprocheck.reproduction import pip_check, python_selector, runtime
 from reprocheck.reproduction import workspace as ws
 from reprocheck.reproduction.models import (
     ReproductionReport,
@@ -46,13 +47,14 @@ def reproduce(
     *,
     network: bool = False,
     keep_workspace: bool = False,
+    runtime_checks: bool = False,
     base_dir: Path | None = None,
     timeout: int = ws.DEFAULT_TIMEOUT,
 ) -> ScanReport:
     """Attempt a controlled reproduction of ``project``.
 
-    Returns the reproduction report and the findings produced along the way.
-    The original project is never modified.
+    ``runtime_checks`` is opt-in: it imports the installed package and collects
+    tests, which executes project code. The original project is never modified.
     """
     origin = _resolve(project)
     facts = collect_facts(origin)
@@ -68,6 +70,7 @@ def reproduce(
         source=str(workspace.source),
         original_project=str(origin),
         network_enabled=network,
+        runtime_checks_enabled=runtime_checks,
     )
     steps: list[str] = ["static scan", "workspace created", "project copied"]
     env = _subprocess_env(network=network)
@@ -111,8 +114,47 @@ def reproduce(
 
     reproduction.pip_check = pip_check.run_pip_check(workspace, env)
     steps.append("pip check completed")
+
+    if report.project.path:
+        reproduction.installed_distribution = runtime.read_installed_version(
+            workspace, facts.distribution_name or "", env
+        )
+        if reproduction.installed_distribution.version:
+            steps.append(
+                f"installed version: {reproduction.installed_distribution.version}"
+            )
+
+    if runtime_checks:
+        _run_runtime_checks(reproduction, workspace, facts, env, steps)
+
     return _finish(
         report, reproduction, workspace, before, origin, steps, keep_workspace
+    )
+
+
+def _run_runtime_checks(
+    reproduction: ReproductionReport,
+    workspace: ws.Workspace,
+    facts: Facts,
+    env: dict[str, str],
+    steps: list[str],
+) -> None:
+    """Import the installed modules and collect tests. Executes project code."""
+    candidates, reason = runtime.discover_import_targets(
+        workspace, facts.distribution_name or "", env
+    )
+    reproduction.import_discovery = reason
+    reproduction.imports = runtime.run_import_checks(workspace, candidates, env)
+    steps.append(f"import smoke test: {len(candidates)} candidate(s)")
+
+    reproduction.test_collection = runtime.collect_tests(workspace, env)
+    steps.append(
+        "pytest collection: "
+        + (
+            "ran"
+            if reproduction.test_collection.ran
+            else "pytest not installed, skipped"
+        )
     )
 
 

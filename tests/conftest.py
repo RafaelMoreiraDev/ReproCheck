@@ -128,6 +128,29 @@ def _metadata() -> str:
     return "\\n".join(lines) + "\\n"
 
 
+def _payload():
+    """Every top-level module and package of the project, as wheel entries."""
+    root = os.path.dirname(os.path.abspath(__file__))
+    excluded = {{"inhouse_backend.py", "setup.py", "conftest.py"}}
+    entries = []
+    for name in sorted(os.listdir(root)):
+        if name in excluded or name.startswith("."):
+            continue
+        path = os.path.join(root, name)
+        if name.endswith(".py"):
+            with open(path, "rb") as handle:
+                entries.append((name, handle.read()))
+        elif os.path.isfile(os.path.join(path, "__init__.py")):
+            for member in sorted(os.listdir(path)):
+                if not member.endswith(".py"):
+                    continue
+                with open(os.path.join(path, member), "rb") as handle:
+                    entries.append((name + "/" + member, handle.read()))
+    if not entries:
+        entries.append((DIST + "/__init__.py", b"VALUE = 1\\n"))
+    return entries
+
+
 def get_requires_for_build_wheel(config_settings=None):
     return []
 
@@ -136,17 +159,16 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     name = "{{}}-{{}}-py3-none-any.whl".format(DIST, VERSION)
     path = os.path.join(wheel_directory, name)
     dist_info = "{{}}-{{}}.dist-info".format(DIST, VERSION)
+    entries = _payload() + [
+        ("{{}}/METADATA".format(dist_info), _metadata().encode()),
+        (
+            "{{}}/WHEEL".format(dist_info),
+            b"Wheel-Version: 1.0\\nGenerator: reprocheck-tests\\n"
+            b"Root-Is-Purelib: true\\nTag: py3-none-any\\n",
+        ),
+    ]
     records = []
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
-        entries = [
-            ("{{}}/__init__.py".format(DIST), b"VALUE = 1\\n"),
-            ("{{}}/METADATA".format(dist_info), _metadata().encode()),
-            (
-                "{{}}/WHEEL".format(dist_info),
-                b"Wheel-Version: 1.0\\nGenerator: reprocheck-tests\\n"
-                b"Root-Is-Purelib: true\\nTag: py3-none-any\\n",
-            ),
-        ]
         for arcname, data in entries:
             archive.writestr(arcname, data)
             digest = (

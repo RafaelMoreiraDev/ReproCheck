@@ -330,6 +330,8 @@ class Facts:
     tools: list[ToolSignal] = field(default_factory=list)
     distribution_name: str | None = None
     declared_dependencies: tuple[str, ...] = ()
+    dynamic_fields: tuple[str, ...] = ()
+    version_providers: tuple[str, ...] = ()
     dependency_declarations: list[DependencyDeclaration] = field(default_factory=list)
     requirement_includes: list[RequirementsInclude] = field(default_factory=list)
     workflow_references: list[WorkflowReference] = field(default_factory=list)
@@ -366,6 +368,8 @@ class Facts:
             "project_metadata": {
                 "name": self.distribution_name,
                 "dependencies": list(self.declared_dependencies),
+                "dynamic_fields": list(self.dynamic_fields),
+                "version_providers": list(self.version_providers),
             },
         }
 

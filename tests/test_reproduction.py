@@ -18,7 +18,7 @@ from pathlib import Path
 
 from conftest import inhouse_backend_files, make_wheel, requires_git, run_git
 from reprocheck.cli import EXIT_ERROR, EXIT_OK, main
-from reprocheck.reproduction import python_selector
+from reprocheck.reproduction import python_selector, runner
 from reprocheck.reproduction.installer import (
     BASE_PIP_FLAGS,
     STRATEGY_PROJECT,
@@ -119,7 +119,19 @@ def test_successful_reproduction(make_project, tmp_path) -> None:
         "strategy: project",
         "installation succeeded",
         "pip check completed",
+        "installed version: 0.1.0",
     ]
+
+    # 9. the installed version is read from the reproduced environment
+    assert data["installed_distribution"]["name"] == "rc-demo"
+    assert data["installed_distribution"]["version"] == "0.1.0"
+    assert data["installed_distribution"]["looks_like_fallback"] is False
+
+    # runtime checks are opt-in
+    assert data["runtime_checks_enabled"] is False
+    assert data["runtime_checks"]["enabled"] is False
+    assert data["runtime_checks"]["imports"] == []
+    assert data["runtime_checks"]["pytest_collection"]["available"] is False
 
     # 6. pip check is clean
     assert data["pip_check"]["ran"] is True
@@ -591,7 +603,8 @@ def test_needs_network_only_reads_the_error_text() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_cli_reproduce(make_project, tmp_path, capsys) -> None:
+def test_cli_reproduce(make_project, tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(runner, "DEFAULT_BASE_DIR", tmp_path / "cli-workspaces")
     root = make_project(inhouse_backend_files("rc-demo"))
     destination = tmp_path / "report.json"
 
@@ -606,7 +619,10 @@ def test_cli_reproduce(make_project, tmp_path, capsys) -> None:
     assert "steps:" in output
 
 
-def test_cli_reproduce_error_exit_code(make_project, tmp_path) -> None:
+def test_cli_reproduce_error_exit_code(make_project, tmp_path, monkeypatch) -> None:
+    # The workspace of a failed attempt is preserved on purpose, so the CLI
+    # tests point it at the pytest temp directory instead of the real one.
+    monkeypatch.setattr(runner, "DEFAULT_BASE_DIR", tmp_path / "cli-workspaces")
     root = make_project(inhouse_backend_files("rc-demo", requires_python="==3.99"))
 
     code = main(["reproduce", str(root), "--json", str(tmp_path / "r.json")])

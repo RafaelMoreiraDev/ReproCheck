@@ -75,6 +75,10 @@ from reprocheck.checks.readme_refs import (
     RC132_MISSING_DIRECTORY,
     check_readme_references,
 )
+from reprocheck.checks.versioning import (
+    RC150_GIT_DERIVED_VERSION,
+    check_git_derived_version,
+)
 from reprocheck.checks.workflows import (
     RC220_MUTABLE_REFERENCE,
     RC221_INCONSISTENT_REFS,
@@ -108,6 +112,8 @@ ALL_CHECKS: tuple[Check, ...] = (
     check_dependency_declarations,
     # V0.4 CI references
     check_workflow_references,
+    # V0.6 version provenance
+    check_git_derived_version,
 )
 
 
@@ -146,6 +152,7 @@ __all__ = [
     "RC131_MISSING_SCRIPT",
     "RC132_MISSING_DIRECTORY",
     "RC140_ARTIFACTS_NOT_IGNORED",
+    "RC150_GIT_DERIVED_VERSION",
     "RC200_CONFLICTING_PINS",
     "RC201_DISJOINT_CONSTRAINTS",
     "RC202_DUPLICATE_DECLARATION",
