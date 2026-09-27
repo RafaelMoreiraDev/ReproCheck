@@ -128,6 +128,19 @@ Dependency findings
   INFO RC203 5 runtime dependencies have no version constraint: ...
   INFO RC204 Runtime dependencies use 9 exact pin(s), 1 range(s) and 5 without constraint. ...
 
+CI References
+  external: 7
+  full-SHA pinned: 0
+  mutable refs: 7
+  local: 0
+
+CI findings
+  0 errors
+  6 warnings
+  0 info
+
+  WARN RC220 External GitHub Action/workflow 'actions/checkout' is referenced by the mutable ref 'v2' ...
+
 Report:
   C:\Projetos\ReproCheck\reprocheck-report.json
 ```
@@ -136,8 +149,8 @@ Report:
 
 ```json
 {
-  "reprocheck_version": "0.3.0",
-  "report_schema_version": "2",
+  "reprocheck_version": "0.4.0",
+  "report_schema_version": "3",
   "scan_timestamp": "2026-01-01T12:00:00+00:00",
   "project": { "name": "example", "path": "C:\\Projetos\\example", "python_file_count": 3 },
   "git": { "is_repository": true, "branch": "main", "head": "9f1c2b7...", "is_clean": true },
@@ -181,13 +194,28 @@ Report:
     "includes": [],
     "summary": { "runtime": 15, "dev": 17, "test": 0, "optional": 0, "build": 3, "constraint": 0, "unique_packages": 27 }
   },
+  "workflow_references": [
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 12,
+      "raw": "actions/checkout@v4",
+      "target": "actions/checkout",
+      "ref": "v4",
+      "reference_type": "action",
+      "job": "build",
+      "step": null,
+      "is_local": false,
+      "is_sha": false,
+      "is_mutable": true
+    }
+  ],
   "facts": { "package_manager_signals": [], "readme_references": [], "absolute_paths": [], "file_references": [], "tools": [], "gitignore": {}, "project_metadata": {} }
 }
 ```
 
-`report_schema_version` is `"2"`: V0.3 added the `dependencies` section. The
-V0.1 and V0.2 keys are unchanged, and V0.2 only added `report_schema_version`,
-`facts` and `confidence` inside each finding.
+`report_schema_version` is `"3"`: V0.3 added the `dependencies` section and V0.4
+added `workflow_references`. The V0.1 and V0.2 keys are unchanged, and V0.2 only
+added `report_schema_version`, `facts` and `confidence` inside each finding.
 
 Every Python version declaration is always recorded separately, per source.
 Which one wins is never decided: the checks only state whether the declarations
@@ -268,6 +296,29 @@ Anything a check cannot prove is not reported. In particular, a wider range
 with everything, and a `!=` exclusion can hide versions no candidate happens to
 cover, so such a pair is reported as divergent rather than impossible.
 
+### GitHub Actions references (V0.4)
+
+| ID | Severity | Confidence | Rule |
+| --- | --- | --- | --- |
+| RC220 | warning | high | An external action or reusable workflow is referenced by something other than a full 40-character commit SHA |
+| RC221 | warning | high | The same target is referenced with more than one distinct ref |
+| RC222 | warning | high | A local `uses: ./...` action or workflow does not exist in the repository |
+| RC223 | warning | high | A `docker://` action is referenced by tag instead of digest |
+
+ReproCheck knows only three things about a remote reference: whether the ref is
+a full commit SHA, whether the same target is used with different refs, and
+whether a local target exists. It never states that a version is obsolete or
+unsafe, because that would require external and temporal knowledge.
+
+The version-constraint engine behind RC103/RC200/RC201 distinguishes three
+outcomes, and only the first may become an error:
+
+| Outcome | Meaning | Requirement |
+| --- | --- | --- |
+| proof of incompatibility | no version can satisfy both | interval reasoning over `==`, `>=`, `>`, `<=`, `<`, or a single pin explicitly excluded by `!=` |
+| witness of compatibility | one concrete version satisfies both | a real version is produced and quoted as evidence |
+| unknown | neither | never reported as a conflict |
+
 
 ### Confidence
 
@@ -323,15 +374,22 @@ external repository, including the problems it does **not** detect.
   `.ini` and `.cfg` files; references built at runtime are not resolved.
 - Dependency findings prove that two declarations disagree, never that an
   install would fail: nothing is resolved, installed or downloaded.
-- No CI reference analysis: `uses: ...@main` is not flagged.
+- CI references are read line by line: YAML anchors, multi-line values and
+  `uses:` inside expressions are not resolved, and a job name is only recognised
+  at low indentation with the usual inner keys excluded.
+- Incompatibility is only claimed with a proof. Complex operators (`~=`,
+  wildcards, `!=` combinations, prerelease exclusions) may stay undecided, and an
+  undecided pair is reported as info, never as an error.
+- Nothing compares a CI ref with a known-good value, and no remote is queried to
+  check whether a commit or tag still exists.
 - Findings are objective observations only — no reproducibility verdict, no
   scoring, no ranking of problems.
 - No AI, no network, no sandbox, no auto-fix.
 
 ## Roadmap
 
-- `0.4` — CI reference analysis (`uses: ...@branch` versus commit SHA) and
-  `setup.cfg`/`Pipfile`/Conda dependency sources.
-- `0.5` — baseline reports: store a report and diff it against a new scan to
+- `0.5` — `setup.cfg`, `Pipfile` and Conda dependency sources, plus PEP 735
+  `include-group` resolution.
+- `0.6` — baseline reports: store a report and diff it against a new scan to
   show reproducibility drift over time.
-- `0.6` — non-Python ecosystems (Node) and richer documentation parsing.
+- `0.7` — non-Python ecosystems (Node) and richer documentation parsing.

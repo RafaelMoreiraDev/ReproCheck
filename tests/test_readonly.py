@@ -102,6 +102,29 @@ def test_readme_commands_are_not_executed(make_project, tmp_path) -> None:
     assert not canary.exists()
 
 
+def test_ci_reference_audit_does_not_touch_the_project(make_project) -> None:
+    """Reading workflow references must not modify anything."""
+    root = make_project(
+        {
+            ".github/workflows/a.yml": (
+                "jobs:\n  b:\n    steps:\n      - uses: actions/checkout@v2\n"
+            ),
+            ".github/workflows/b.yml": (
+                "jobs:\n  b:\n    steps:\n      - uses: actions/checkout@v4\n"
+                "      - uses: ./.github/actions/missing\n"
+            ),
+            "a.py": "",
+        }
+    )
+    before = fingerprint(root)
+
+    report = scan(root)
+    ids = {finding.id for finding in report.findings}
+
+    assert {"RC220", "RC221", "RC222"} <= ids
+    assert fingerprint(root) == before
+
+
 def test_dependency_audit_does_not_touch_the_project(make_project) -> None:
     """Scanning dependency declarations must not modify anything."""
     root = make_project(

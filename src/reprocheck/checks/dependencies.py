@@ -32,9 +32,7 @@ from enum import StrEnum
 from itertools import combinations
 from pathlib import Path
 
-from packaging.specifiers import InvalidSpecifier, SpecifierSet
-from packaging.version import InvalidVersion, Version
-
+from reprocheck.checks.conflicts import Verdict, compare
 from reprocheck.facts import (
     KIND_BUILD,
     KIND_CONSTRAINT,
@@ -73,9 +71,10 @@ class Relation(StrEnum):
     """How two declarations of the same package relate to each other."""
 
     IDENTICAL = "identical"
-    DIVERGENT = "divergent"
+    COMPATIBLE = "compatible"
     INCOMPATIBLE = "incompatible"
-    UNKNOWN = "unknown"
+    UNDECIDED = "undecided"
+    NOT_COMPARABLE = "not-comparable"
 
 
 # --------------------------------------------------------------------------- #
@@ -197,49 +196,32 @@ def _deduplicate(
 def _classify(
     left: DependencyDeclaration, right: DependencyDeclaration
 ) -> tuple[Relation, str]:
-    """Compare two declarations of the same package."""
+    """Compare two declarations of the same package.
+
+    The verdict comes from :mod:`reprocheck.checks.conflicts`, which only
+    reports an incompatibility when it can prove one.
+    """
     if left.is_external or right.is_external:
-        return (Relation.UNKNOWN, "external reference")
+        return (Relation.NOT_COMPARABLE, "external reference")
     if left.is_conditional or right.is_conditional:
         if left.marker != right.marker:
-            return (Relation.UNKNOWN, "different environment markers")
+            return (Relation.NOT_COMPARABLE, "different environment markers")
     if left.extras != right.extras:
-        return (Relation.DIVERGENT, "different extras")
+        return (Relation.NOT_COMPARABLE, "different extras")
 
-    left_spec, left_error = _parse_specifier(left)
-    right_spec, right_error = _parse_specifier(right)
-    if left_error or right_error:
-        return (Relation.UNKNOWN, f"unparsable specifier: {left_error or right_error}")
-
-    if _specifier_text(left_spec) == _specifier_text(right_spec):
-        if not left.is_bounded and not right.is_bounded:
-            return (Relation.IDENTICAL, "both declarations are unbounded")
-        return (Relation.IDENTICAL, "identical version constraint")
-
-    if not left.is_bounded or not right.is_bounded:
-        return (
-            Relation.DIVERGENT,
-            f"'{left.specifier or 'no constraint'}' vs "
-            f"'{right.specifier or 'no constraint'}'",
+    result = compare(left.specifier, right.specifier)
+    if result.verdict is Verdict.UNKNOWN:
+        return (Relation.NOT_COMPARABLE, result.detail)
+    if result.verdict is Verdict.IDENTICAL:
+        detail = (
+            "both declarations are unbounded"
+            if not left.is_bounded and not right.is_bounded
+            else result.detail
         )
-
-    candidates = _candidates(left_spec, right_spec)
-    if not _has_common_version(candidates, left_spec, right_spec):
-        if _has_exclusion(left_spec) or _has_exclusion(right_spec):
-            # ``!=`` rules can hide versions no candidate happens to cover.
-            return (
-                Relation.DIVERGENT,
-                f"no common version among {len(candidates)} candidates, but "
-                "exclusions are involved",
-            )
-        return (
-            Relation.INCOMPATIBLE,
-            f"no version satisfies both ({len(candidates)} candidates tested)",
-        )
-    return (
-        Relation.DIVERGENT,
-        f"compatible but declared as '{left.specifier}' and '{right.specifier}'",
-    )
+        return (Relation.IDENTICAL, detail)
+    if result.verdict is Verdict.COMPATIBLE:
+        return (Relation.COMPATIBLE, result.detail)
+    return (Relation.INCOMPATIBLE, result.detail)
 
 
 def _finding_for_pair(pair: Pair) -> Finding | None:
@@ -317,10 +299,29 @@ def _finding_for_pair(pair: Pair) -> Finding | None:
             confidence=Confidence.HIGH,
         )
 
-    if pair.relation is Relation.DIVERGENT and pair.crosses_optional:
+    if (
+        pair.relation in {Relation.COMPATIBLE, Relation.UNDECIDED}
+        and pair.crosses_optional
+    ):
+        # An opt-in extra may legitimately differ from the runtime declaration.
         return None
 
-    if pair.relation is Relation.DIVERGENT:
+    if pair.relation is Relation.UNDECIDED:
+        return Finding(
+            id=RC202_DUPLICATE_DECLARATION,
+            title="Dependency declared more than once, compatibility unproven",
+            severity=Severity.INFO,
+            category=CATEGORY,
+            message=(
+                f"'{name}' is declared twice with constraints ReproCheck cannot "
+                f"compare formally ({pair.detail}): {_origin(pair.left)} and "
+                f"{_origin(pair.right)}."
+            ),
+            evidence=evidence,
+            confidence=Confidence.LOW,
+        )
+
+    if pair.relation is Relation.COMPATIBLE:
         runtime_dev = {pair.left.kind, pair.right.kind} & {KIND_DEV, KIND_TEST}
         if runtime_dev and {pair.left.kind, pair.right.kind} <= {
             KIND_RUNTIME,
@@ -333,12 +334,13 @@ def _finding_for_pair(pair: Pair) -> Finding | None:
                 severity=Severity.INFO,
                 category=CATEGORY,
                 message=(
-                    f"'{name}' is declared differently for runtime and dev "
-                    f"({pair.detail}); both environments install it, so the "
-                    "difference is intentional only if it stays compatible."
+                    f"'{name}' is declared differently for runtime and dev but "
+                    f"both can be satisfied ({pair.detail}); both environments "
+                    "install it, so the difference is intentional only if it "
+                    "stays compatible."
                 ),
                 evidence=evidence,
-                confidence=Confidence.MEDIUM,
+                confidence=Confidence.HIGH,
             )
         return Finding(
             id=RC202_DUPLICATE_DECLARATION,
@@ -379,110 +381,6 @@ def _scope_label(pair: Pair) -> str:
         "optional-mixed": "extra and runtime",
         "constraint": "install constrained by the constraints file",
     }.get(pair.scope, pair.scope)
-
-
-# --------------------------------------------------------------------------- #
-# Specifier comparison
-# --------------------------------------------------------------------------- #
-
-
-def _parse_specifier(
-    declaration: DependencyDeclaration,
-) -> tuple[SpecifierSet | None, str | None]:
-    text = declaration.specifier.strip()
-    if not text:
-        return (None, None)
-    try:
-        return (SpecifierSet(text), None)
-    except InvalidSpecifier as exc:
-        return (None, str(exc))
-
-
-def _specifier_text(specifier: SpecifierSet | None) -> str:
-    if specifier is None:
-        return ""
-    return ",".join(sorted(str(item) for item in specifier))
-
-
-def _has_exclusion(specifier: SpecifierSet | None) -> bool:
-    return bool(specifier) and any(item.operator == "!=" for item in specifier or [])
-
-
-def _candidates(*specifiers: SpecifierSet | None) -> list[Version]:
-    """Versions used to test whether two constraints can overlap.
-
-    Candidates come from every version mentioned by the declarations plus the
-    boundaries each operator implies. A conclusion is only reported when no
-    candidate satisfies both constraints, and the evidence always states how
-    many were tested.
-    """
-    raw: set[str] = set()
-    for specifier in specifiers:
-        if specifier is None:
-            continue
-        raw.update(_VERSION_TOKEN_RE.findall(str(specifier)))
-        for item in specifier:
-            if not item.version:
-                continue
-            raw.add(item.version)
-            if item.operator in {"<", "<="}:
-                raw.add(_previous_minor(item.version))
-            if item.operator in {"!=", ">"}:
-                raw.add(_next_patch(item.version))
-    versions: set[Version] = set()
-    for text in raw:
-        for candidate in (text, f"{text}.0"):
-            version = _as_version(candidate)
-            if version is not None and not version.is_prerelease:
-                versions.add(version)
-    return sorted(versions)
-
-
-def _has_common_version(
-    candidates: list[Version], left: SpecifierSet | None, right: SpecifierSet | None
-) -> bool:
-    for candidate in candidates:
-        if left is not None and candidate not in left:
-            continue
-        if right is not None and candidate not in right:
-            continue
-        return True
-    return False
-
-
-def _as_version(value: str) -> Version | None:
-    try:
-        return Version(value)
-    except InvalidVersion:
-        return None
-
-
-def _previous_minor(version: str) -> str:
-    parts = version.split(".")
-    while len(parts) < 3:
-        parts.append("0")
-    try:
-        numbers = [int(part) for part in parts[:3]]
-    except ValueError:  # pragma: no cover - defensive
-        return version
-    if numbers[1] > 0:
-        numbers[1] -= 1
-    elif numbers[0] > 0:
-        numbers[0] -= 1
-    numbers[2] = 0
-    return ".".join(str(number) for number in numbers)
-
-
-def _next_patch(version: str) -> str:
-    parts = version.split(".")
-    while len(parts) < 3:
-        parts.append("0")
-    try:
-        numbers = [int(part) for part in parts[:3]]
-    except ValueError:  # pragma: no cover - defensive
-        return version
-    numbers[2] += 1
-    return ".".join(str(number) for number in numbers)
 
 
 # --------------------------------------------------------------------------- #

@@ -153,6 +153,13 @@ REF_URL = "url"
 REF_VCS = "vcs"
 REF_LOCAL_PATH = "local-path"
 
+# How a ``uses:`` entry refers to something.
+REF_ACTION = "action"
+REF_REUSABLE_WORKFLOW = "reusable-workflow"
+REF_LOCAL_ACTION = "local-action"
+REF_LOCAL_WORKFLOW = "local-workflow"
+REF_DOCKER = "docker"
+
 
 @dataclass(frozen=True, slots=True)
 class DependencyDeclaration:
@@ -247,6 +254,42 @@ class RequirementsInclude:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkflowReference:
+    """A ``uses:`` entry found in a GitHub Actions workflow.
+
+    Nothing is resolved: the target and the ref are recorded exactly as the
+    workflow spells them, and no remote is ever contacted.
+    """
+
+    file: str
+    line: int
+    raw: str
+    target: str
+    ref: str | None = None
+    reference_type: str = REF_ACTION
+    job: str | None = None
+    step: str | None = None
+    is_local: bool = False
+    is_sha: bool = False
+    is_mutable: bool = True
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "file": self.file,
+            "line": self.line,
+            "raw": self.raw,
+            "target": self.target,
+            "ref": self.ref,
+            "reference_type": self.reference_type,
+            "job": self.job,
+            "step": self.step,
+            "is_local": self.is_local,
+            "is_sha": self.is_sha,
+            "is_mutable": self.is_mutable,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class GitignoreInfo:
     """The parsed content of the project ``.gitignore``."""
 
@@ -289,6 +332,7 @@ class Facts:
     declared_dependencies: tuple[str, ...] = ()
     dependency_declarations: list[DependencyDeclaration] = field(default_factory=list)
     requirement_includes: list[RequirementsInclude] = field(default_factory=list)
+    workflow_references: list[WorkflowReference] = field(default_factory=list)
     gitignore: GitignoreInfo = field(default_factory=GitignoreInfo)
 
     def has_file(self, relative: str) -> bool:

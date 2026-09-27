@@ -75,6 +75,13 @@ from reprocheck.checks.readme_refs import (
     RC132_MISSING_DIRECTORY,
     check_readme_references,
 )
+from reprocheck.checks.workflows import (
+    RC220_MUTABLE_REFERENCE,
+    RC221_INCONSISTENT_REFS,
+    RC222_MISSING_LOCAL_REFERENCE,
+    RC223_MUTABLE_DOCKER_REFERENCE,
+    check_workflow_references,
+)
 from reprocheck.facts import Facts
 from reprocheck.models import Finding
 
@@ -97,7 +104,10 @@ ALL_CHECKS: tuple[Check, ...] = (
     check_absolute_paths,
     check_missing_local_paths,
     check_gitignore_artifacts,
+    # V0.3 dependency declarations
     check_dependency_declarations,
+    # V0.4 CI references
+    check_workflow_references,
 )
 
 
@@ -147,6 +157,10 @@ __all__ = [
     "RC208_EXTERNAL_REFERENCE",
     "RC209_MUTABLE_VCS_REFERENCE",
     "RC210_LOCAL_PATH_DEPENDENCY",
+    "RC220_MUTABLE_REFERENCE",
+    "RC221_INCONSISTENT_REFS",
+    "RC222_MISSING_LOCAL_REFERENCE",
+    "RC223_MUTABLE_DOCKER_REFERENCE",
     "Check",
     "Facts",
     "Finding",

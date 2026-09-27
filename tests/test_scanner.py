@@ -118,10 +118,11 @@ def test_json_report_is_written(tmp_path: Path, make_project) -> None:
         "readme_commands",
         "findings",
         "dependencies",
+        "workflow_references",
         "facts",
     ]
     assert data["reprocheck_version"] == __version__
-    assert data["report_schema_version"] == "2"
+    assert data["report_schema_version"] == "3"
     assert data["project"]["name"] == "example"
     assert data["git"]["is_repository"] is False
     assert data["findings"]

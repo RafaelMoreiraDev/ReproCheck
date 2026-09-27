@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
+from reprocheck.checks.conflicts import Verdict, compare
 from reprocheck.facts import Facts
 from reprocheck.models import Confidence, Finding, PythonRequirement, Severity
 
@@ -252,47 +253,45 @@ def _no_overlap(declarations: list[Declaration]) -> list[Finding]:
     Only *project* declarations take part: a conflict between two of them is
     provable, while a conflict with a local or CI pin is already reported by
     RC101/RC102 (and a CI matrix is expected to list several versions).
+
+    Incompatibility is only claimed when
+    :mod:`reprocheck.checks.conflicts` can prove it, so an undecidable pair
+    never becomes an error.
     """
     project = [item for item in declarations if item.kind == KIND_PROJECT]
-    constraints = [item.specifier for item in project if item.specifier is not None]
-    pins = [item for item in project if item.specifier is None and item.version]
-    if not constraints and len(pins) < 2:
-        return []
-
-    candidates = _candidates(declarations)
-    if not candidates:
-        return []
-
-    for candidate in candidates:
-        if any(candidate not in specifier for specifier in constraints):
-            continue
-        if pins and not any(candidate == pin.version for pin in pins):
-            continue
-        return []
-
-    described = [str(specifier) for specifier in constraints] + [
-        f"=={pin.version}" for pin in pins
+    entries = [
+        (item.value, str(item.specifier))
+        for item in project
+        if item.specifier is not None
     ]
-    return [
-        Finding(
-            id=RC103_NO_OVERLAP,
-            title="Declared Python constraints have no overlapping version",
-            severity=Severity.ERROR,
-            category="python",
-            message=(
-                "None of the "
-                f"{len(candidates)} candidate version(s) derived from the "
-                "declarations satisfies every declared constraint: "
-                + "; ".join(sorted(described))
-                + "."
-            ),
-            evidence=(
-                "candidates tested: "
-                + ", ".join(str(candidate) for candidate in candidates)
-            ),
-            confidence=Confidence.HIGH,
-        )
+    entries += [
+        (item.value, f"=={item.version}")
+        for item in project
+        if item.specifier is None and item.version
     ]
+    if not entries:
+        return []
+
+    for index, (left_label, left_text) in enumerate(entries):
+        for right_label, right_text in entries[index + 1 :]:
+            result = compare(left_text, right_text)
+            if result.verdict is not Verdict.INCOMPATIBLE:
+                continue
+            return [
+                Finding(
+                    id=RC103_NO_OVERLAP,
+                    title="Declared Python constraints have no overlapping version",
+                    severity=Severity.ERROR,
+                    category="python",
+                    message=(
+                        f"'{left_label}' and '{right_label}' cannot both be "
+                        f"satisfied: {result.detail}."
+                    ),
+                    evidence="; ".join(sorted(text for _, text in entries)),
+                    confidence=Confidence.HIGH,
+                )
+            ]
+    return []
 
 
 def _consistent(count: int) -> Finding:
@@ -320,55 +319,3 @@ def _satisfies(constraint: Declaration, version: Version) -> bool:
     if constraint.version is not None:
         return version == constraint.version
     return True
-
-
-# --------------------------------------------------------------------------- #
-# Candidate versions
-# --------------------------------------------------------------------------- #
-
-
-def _candidates(declarations: list[Declaration]) -> list[Version]:
-    """Build the set of versions used to test constraint compatibility.
-
-    Candidates come from every concrete version mentioned by the project plus
-    the boundaries implied by the declared specifiers.
-    """
-    raw: set[str] = set()
-    for item in declarations:
-        raw.update(_VERSION_TOKEN_RE.findall(item.value))
-        if item.specifier is not None:
-            raw.update(_boundaries(item.specifier))
-    versions: set[Version] = set()
-    for text in raw:
-        for candidate in (text, f"{text}.0"):
-            version = _as_version(candidate)
-            if version is not None and not version.is_prerelease:
-                versions.add(version)
-    return sorted(versions)
-
-
-def _boundaries(specifier: SpecifierSet) -> set[str]:
-    found: set[str] = set()
-    for item in specifier:
-        if not item.version:
-            continue
-        found.add(item.version)
-        if item.operator in {"<", "<="}:
-            found.add(_previous_minor(item.version))
-    return found
-
-
-def _previous_minor(version: str) -> str:
-    parts = version.split(".")
-    while len(parts) < 3:
-        parts.append("0")
-    try:
-        numbers = [int(part) for part in parts[:3]]
-    except ValueError:  # pragma: no cover - defensive
-        return version
-    if numbers[1] > 0:
-        numbers[1] -= 1
-    elif numbers[0] > 0:
-        numbers[0] -= 1
-    numbers[2] = 0
-    return ".".join(str(number) for number in numbers)

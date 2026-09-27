@@ -5,7 +5,7 @@ repository and is never modified: ReproCheck only reads it.
 
 - Target: `C:\Projetos\OpenClimateFix\open-source-quartz-solar-forecast`
 - Commit scanned: `c07ad7402598979a7cd3c2eab7430098a3d56e78` (branch `main`, clean)
-- ReproCheck version: `0.3.0` (TASK-003)
+- ReproCheck version: `0.4.0` (TASK-003)
 - Date: 2026-09-26
 
 The `OCF-Bxx` list below is an **external benchmark only**. It was reconstructed by
@@ -33,10 +33,10 @@ ReproCheck implements it today:
 
 | # | Known problem | Detection mode | Detected? | Check | Notes |
 |---|---|---|---|---|---|
-| OCF-B01 | Reusable workflows referenced by mutable branch (`@main`, `@issue/pip-all`) in 5 of 6 workflows | static | No | — | No CI-reference analysis implemented yet |
-| OCF-B02 | First-party actions pinned to major tags (`actions/checkout@v2`, `actions/setup-python@v4`) instead of a SHA | static | No | — | Same gap as OCF-B01 |
+| OCF-B01 | Reusable workflows referenced by mutable branch (`@main`, `@issue/pip-all`) in 5 of 6 workflows | static | **Yes** (new in V0.4) | RC220 | Six findings, one per distinct target+ref; `branch_ci.yml@main` occurs in two workflows and is reported once with both locations |
+| OCF-B02 | First-party actions pinned to major tags (`actions/checkout@v2`, `actions/setup-python@v4`) instead of a SHA | static | **Yes** (new in V0.4) | RC220 | The message states mutability only; ReproCheck never claims a ref is obsolete |
 | OCF-B03 | `[tool.uv]` configures uv but no `uv.lock` is committed, so dependency versions are not pinned by the repository | static | **Yes** | RC116 | Warning, high confidence |
-| OCF-B04 | 5 of 15 runtime dependencies are unpinned (`typer`, `async_timeout`, `uvicorn`, `pydantic_settings`, `httpx`) while the others use `==` | static | **Yes** (new in V0.3) | RC203, RC204 | Info, high confidence; distribution reported as 9 pins / 1 range / 5 unconstrained |
+| OCF-B04 | 5 of 15 runtime dependencies are unpinned (`typer`, `async_timeout`, `uvicorn`, `pydantic_settings`, `httpx`) while the others use `==` | static | **Yes** | RC203, RC204 | Info, high confidence; distribution reported as 9 pins / 1 range / 5 unconstrained |
 | OCF-B05 | README documents `pip install -e .`, an install path that cannot consume any lockfile | static | No | RC114 did not fire | RC114 requires a lockfile to exist; here none does (see OCF-B03) |
 | OCF-B06 | README documents `conda install -c conda-forge pyresample`, a package absent from the project metadata | static | **Yes** | RC115 | Warning, medium confidence |
 | OCF-B07 | `.gitignore` covers `venv` but not `.venv`, the layout uv actually creates | static | **Yes** | RC140 | Listed among the uncovered patterns |
@@ -45,10 +45,14 @@ ReproCheck implements it today:
 | OCF-B10 | Version is dynamic from Git tags (`dynamic = ["version"]`, `dirty_template = "{tag}"`), so a dirty tree reuses the release version | static (partial) | No | — | The declaration is readable; proving the collision needs a build |
 | OCF-B11 | `scripts/download_tz-sam.py` downloads a quarterly ZIP from a hardcoded URL with no checksum | requires network | No | — | The missing checksum is static, but the artifact itself is not inspected |
 | OCF-B12 | Python version consistency | static | n/a | RC100 | Not a problem: 6 declarations, all consistent with `>=3.11` |
-| OCF-B13 | `python-version: "['3.11']"` stringified list and `test_python_versions` env inputs to a reusable workflow | static | Partial | — | The value is parsed (3.11) but the fragile convention is not flagged |
+| OCF-B13 | `python-version: "['3.11']"` stringified list and `test_python_versions` env inputs to a reusable workflow | static | Partial | — | The value is parsed (3.11); the fragile convention itself is still not flagged |
 
-**Score: 5 fully detected (OCF-B03, OCF-B04, OCF-B06, OCF-B07, OCF-B08),
-1 partial (OCF-B13), 7 not detected.**
+**Score: 7 fully detected (OCF-B01, OCF-B02, OCF-B03, OCF-B04, OCF-B06, OCF-B07,
+OCF-B08), 1 partial (OCF-B13), 5 not detected.**
+
+Five of the remaining cases are `static`, so they remain reachable without
+execution, network or domain knowledge; OCF-B09 needs semantics, OCF-B10 needs a
+build and OCF-B11 needs the network.
 
 ## Dependency audit (V0.3)
 
@@ -89,6 +93,40 @@ range, no missing `-r`/`-c` include, no URL, VCS or local-path dependency. The
 RC202 entries are all redundancy between the `all` meta group and the groups it
 repeats — factual, and reported as info only.
 
+## CI reference audit (V0.4)
+
+Every `uses:` entry found in the six workflow files:
+
+| File:line | Job | Target | Ref | Kind |
+|---|---|---|---|---|
+| `api_branch_ci.yaml:11` | `branch_ci` | `openclimatefix/.github/.github/workflows/branch_ci.yml` | `main` | reusable workflow |
+| `merged_ci.yml:10` | `bump-tag` | `openclimatefix/.github/.github/workflows/bump_tag.yml` | `main` | reusable workflow |
+| `publish.yaml:12` | `build` | `actions/checkout` | `v2` | action |
+| `publish.yaml:15` | `build` | `actions/setup-python` | `v4` | action |
+| `pytest.yaml:12` | `call-run-python-tests-integration` | `openclimatefix/.github/.github/workflows/python-test.yml` | `issue/pip-all` | reusable workflow |
+| `pytest_unit.yaml:15` | `branch_ci` | `openclimatefix/.github/.github/workflows/branch_ci.yml` | `main` | reusable workflow |
+| `tagged_ci.yml:15` | `tagged-ci` | `openclimatefix/.github/.github/workflows/tagged_ci.yml` | `main` | reusable workflow |
+
+- external references: **7**
+- pinned by a full commit SHA: **0**
+- referenced by a mutable ref: **7**
+- local references: **0**
+- distinct targets with divergent refs: **0** (no RC221: every target is used with a single ref)
+- local references pointing to a missing path: **0** (no RC222)
+
+CI findings actually produced:
+
+```
+0 errors / 6 warnings / 0 info
+
+RC220  actions/checkout                                     @v2
+RC220  actions/setup-python                                 @v4
+RC220  .../branch_ci.yml                                    @main   (2 locations)
+RC220  .../bump_tag.yml                                     @main
+RC220  .../python-test.yml                                  @issue/pip-all
+RC220  .../tagged_ci.yml                                    @main
+```
+
 ## Findings actually produced
 
 ```
@@ -101,6 +139,9 @@ Findings: 0 errors / 3 warnings / 1 info
 
 Dependency findings: 0 errors / 0 warnings / 11 info
   (see the dependency audit table above)
+
+CI findings: 0 errors / 6 warnings / 0 info
+  (see the CI reference audit table above)
 ```
 
 No false positive was observed on this project. One candidate false positive was
@@ -125,6 +166,10 @@ directory is created by the clone.
   workflows agree on Python 3.11.
 - No RC200/RC201/RC205: no dependency is declared twice with incompatible or
   divergent constraints.
+- No RC220/RC221/RC222/RC223 beyond what is listed: no ref is SHA-pinned, no
+  target is used with two different refs, no local reference is broken, and no
+  Docker action is used. ReproCheck does not claim that `checkout@v2` is
+  obsolete — that would need external, temporal knowledge.
 
 ## Read-only verification
 

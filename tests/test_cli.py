@@ -11,6 +11,8 @@ import pytest
 
 from reprocheck.cli import EXIT_ERROR, EXIT_OK, EXIT_USAGE, main
 
+SHA = "0123456789abcdef0123456789abcdef01234567"
+
 PROJECT = {
     "pyproject.toml": "[project]\nname = 'example'\nrequires-python = '>=3.11'\n",
     "README.md": "# Example\n\n```bash\npip install -e .\n```\n",
@@ -154,6 +156,34 @@ def test_dependencies_section_and_counts(make_project, tmp_path, capsys) -> None
     assert "INFO RC203" in output
     # Dependency findings are listed only in their own section.
     assert output.count("INFO RC203") == 1
+
+
+CIVERENCES = {
+    ".github/workflows/ci.yml": (
+        "jobs:\n"
+        "  build:\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        f"      - uses: org/action@{SHA}\n"
+    ),
+    "a.py": "",
+}
+
+
+def test_ci_references_section(make_project, tmp_path, capsys) -> None:
+    root = make_project(CIVERENCES)
+    main(["scan", str(root), "--json", str(tmp_path / "r.json")])
+    output = capsys.readouterr().out
+
+    assert "CI References\n" in output
+    assert "  external: 2" in output
+    assert "  full-SHA pinned: 1" in output
+    assert "  mutable refs: 1" in output
+    assert "  local: 0" in output
+    assert "CI findings\n" in output
+    assert "  1 warnings" in output
+    assert "WARN RC220" in output
+    assert output.count("WARN RC220") == 1
 
 
 def test_relative_path_argument(make_project, tmp_path, monkeypatch) -> None:

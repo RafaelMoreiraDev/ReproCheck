@@ -31,6 +31,7 @@ _CATEGORY_LABEL = {
 
 #: Findings of this category are listed in their own terminal section.
 DEPENDENCY_CATEGORY = "dependencies"
+CI_REFERENCE_CATEGORY = "ci-references"
 
 
 def format_report(report: ScanReport, output: str, verbose: bool = False) -> str:
@@ -73,17 +74,45 @@ def format_report(report: ScanReport, output: str, verbose: bool = False) -> str
     lines.extend(_dependency_section(report))
     lines.append("")
 
-    general = [item for item in report.findings if item.category != DEPENDENCY_CATEGORY]
+    general = [
+        item
+        for item in report.findings
+        if item.category not in {DEPENDENCY_CATEGORY, CI_REFERENCE_CATEGORY}
+    ]
     dependency = [
         item for item in report.findings if item.category == DEPENDENCY_CATEGORY
+    ]
+    ci_references = [
+        item for item in report.findings if item.category == CI_REFERENCE_CATEGORY
     ]
     lines.extend(_findings_section(general))
     lines.append("")
     lines.extend(_findings_section(dependency, title="Dependency findings"))
     lines.append("")
+    lines.extend(_ci_reference_section(report))
+    lines.extend(_findings_section(ci_references, title="CI findings"))
+    lines.append("")
     lines.append("Report:")
     lines.append(f"  {output}")
     return "\n".join(lines)
+
+
+def _ci_reference_section(report: ScanReport) -> list[str]:
+    references = report.workflow_references
+    if not references:
+        return []
+    external = [item for item in references if not item.get("is_local")]
+    local = [item for item in references if item.get("is_local")]
+    pinned = [item for item in external if item.get("is_sha")]
+    mutable = [item for item in external if item.get("is_mutable")]
+    return [
+        "CI References",
+        f"  external: {len(external)}",
+        f"  full-SHA pinned: {len(pinned)}",
+        f"  mutable refs: {len(mutable)}",
+        f"  local: {len(local)}",
+        "",
+    ]
 
 
 def _dependency_section(report: ScanReport) -> list[str]:

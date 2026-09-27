@@ -28,12 +28,13 @@ from reprocheck.scanners import (
     python_env,
     readme,
     tools,
+    workflows,
 )
 from reprocheck.scanners.dependencies import DependencyScan
 from reprocheck.scanners.project import scan_project
 
-#: Bumped to "2" in V0.3, when the `dependencies` section was added.
-REPORT_SCHEMA_VERSION = "2"
+#: Bumped to "3" in V0.4, when the ``workflow_references`` section was added.
+REPORT_SCHEMA_VERSION = "3"
 
 
 class ScanError(Exception):
@@ -63,6 +64,7 @@ def scan(path: str | Path) -> ScanReport:
         report_schema_version=REPORT_SCHEMA_VERSION,
         facts=facts.to_dict(),
         dependencies=_dependency_section(facts),
+        workflow_references=[item.to_dict() for item in facts.workflow_references],
     )
 
 
@@ -118,6 +120,7 @@ def collect_facts(root: Path) -> Facts:
         declared_dependencies=_declared_names(dependency_scan.declarations),
         dependency_declarations=dependency_scan.declarations,
         requirement_includes=dependency_scan.includes,
+        workflow_references=workflows.scan_workflow_references(root),
         gitignore=gitignore.scan_gitignore(root),
     )
 

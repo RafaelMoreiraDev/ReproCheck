@@ -107,7 +107,7 @@ def test_disjoint_ranges(make_project) -> None:
 
     assert finding.severity.name == "ERROR"
     assert finding.confidence.name == "HIGH"
-    assert "candidates" in str(finding.evidence)
+    assert "do not overlap" in str(finding.evidence)
 
 
 def test_disjoint_in_a_single_requirements_file(make_project) -> None:
@@ -340,8 +340,9 @@ def test_different_extras_are_not_a_conflict(make_project) -> None:
         }
     )
     ids = _ids(root)
-    assert not {"RC200", "RC201"} & ids
-    assert "RC205" in ids
+    # Extras change what is installed, so the two declarations are not even
+    # comparable: no conflict may be claimed.
+    assert not {"RC200", "RC201", "RC202", "RC205"} & ids
 
 
 # --------------------------------------------------------------------------- #

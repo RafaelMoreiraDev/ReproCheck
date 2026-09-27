@@ -40,6 +40,7 @@ class ScanReport:
     report_schema_version: str = "1"
     facts: dict[str, object] = field(default_factory=dict)
     dependencies: dict[str, object] = field(default_factory=dict)
+    workflow_references: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         """Return a deterministic, JSON-serialisable representation."""
@@ -72,5 +73,6 @@ class ScanReport:
                 for item in _sorted(self.findings, "id", "category", "message")
             ],
             "dependencies": self.dependencies,
+            "workflow_references": self.workflow_references,
             "facts": self.facts,
         }
