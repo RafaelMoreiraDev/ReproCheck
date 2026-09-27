@@ -127,6 +127,35 @@ def test_findings_are_grouped_by_severity(make_project, tmp_path, capsys) -> Non
     assert "  WARN RC130 " in output
 
 
+DEPENDENCIES = {
+    "pyproject.toml": (
+        "[project]\n"
+        "name = 'x'\n"
+        "dependencies = ['numpy==1.23.5', 'requests']\n"
+        "[dependency-groups]\n"
+        "dev = ['pytest>=8']\n"
+        "tests = ['coverage>=7']\n"
+    ),
+    "a.py": "",
+}
+
+
+def test_dependencies_section_and_counts(make_project, tmp_path, capsys) -> None:
+    root = make_project(DEPENDENCIES)
+    main(["scan", str(root), "--json", str(tmp_path / "r.json")])
+    output = capsys.readouterr().out
+
+    assert "Dependencies\n" in output
+    assert "  runtime: 2" in output
+    assert "  dev: 1" in output
+    assert "  test: 1" in output
+    assert "  unique: 4" in output
+    assert "Dependency findings\n" in output
+    assert "INFO RC203" in output
+    # Dependency findings are listed only in their own section.
+    assert output.count("INFO RC203") == 1
+
+
 def test_relative_path_argument(make_project, tmp_path, monkeypatch) -> None:
     make_project(PROJECT, name="relative-sample")
     monkeypatch.chdir(tmp_path)

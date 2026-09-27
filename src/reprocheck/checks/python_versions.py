@@ -247,17 +247,32 @@ def _ci_conflicts(ci: list[Declaration], project: list[Declaration]) -> list[Fin
 
 
 def _no_overlap(declarations: list[Declaration]) -> list[Finding]:
-    constraints = [
-        item.specifier for item in declarations if item.specifier is not None
-    ]
-    if len(constraints) < 1:
+    """Report constraints that no version can satisfy at the same time.
+
+    Only *project* declarations take part: a conflict between two of them is
+    provable, while a conflict with a local or CI pin is already reported by
+    RC101/RC102 (and a CI matrix is expected to list several versions).
+    """
+    project = [item for item in declarations if item.kind == KIND_PROJECT]
+    constraints = [item.specifier for item in project if item.specifier is not None]
+    pins = [item for item in project if item.specifier is None and item.version]
+    if not constraints and len(pins) < 2:
         return []
+
     candidates = _candidates(declarations)
     if not candidates:
         return []
+
     for candidate in candidates:
-        if all(candidate in specifier for specifier in constraints):
-            return []
+        if any(candidate not in specifier for specifier in constraints):
+            continue
+        if pins and not any(candidate == pin.version for pin in pins):
+            continue
+        return []
+
+    described = [str(specifier) for specifier in constraints] + [
+        f"=={pin.version}" for pin in pins
+    ]
     return [
         Finding(
             id=RC103_NO_OVERLAP,
@@ -268,7 +283,7 @@ def _no_overlap(declarations: list[Declaration]) -> list[Finding]:
                 "None of the "
                 f"{len(candidates)} candidate version(s) derived from the "
                 "declarations satisfies every declared constraint: "
-                + "; ".join(sorted(str(specifier) for specifier in constraints))
+                + "; ".join(sorted(described))
                 + "."
             ),
             evidence=(

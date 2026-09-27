@@ -190,6 +190,45 @@ def test_caret_allows_the_declared_minimum() -> None:
     assert "RC104" not in _ids(facts)
 
 
+def test_conflicting_exact_python_pins_in_the_project(make_project) -> None:
+    """Two exact project pins with no common version are a RC103 error."""
+    root = make_project(
+        {
+            "pyproject.toml": (
+                "[project]\n"
+                "name = 'x'\n"
+                "requires-python = '==3.11.4'\n"
+                "[tool.poetry.dependencies]\n"
+                "python = '3.12.1'\n"
+            )
+        }
+    )
+    findings = {item.id: item for item in scan(root).findings}
+
+    assert findings["RC103"].severity is Severity.ERROR
+    assert "==3.11.4" in findings["RC103"].message or "3.11.4" in str(
+        findings["RC103"].evidence
+    )
+    assert "RC100" not in findings
+
+
+def test_matching_exact_python_pins_are_consistent() -> None:
+    facts = _facts(
+        ("pyproject.toml [project.requires-python]", "3.11.4"),
+        ("pyproject.toml [tool.poetry.dependencies.python]", "3.11.4"),
+    )
+    assert _ids(facts) == {"RC100"}
+
+
+def test_ci_matrix_with_several_pins_is_not_a_conflict() -> None:
+    facts = _facts(
+        ("pyproject.toml [project.requires-python]", ">=3.10"),
+        (".github/workflows/ci.yml [python-version]", "3.10"),
+        (".github/workflows/ci.yml [python-version]", "3.12"),
+    )
+    assert "RC103" not in _ids(facts)
+
+
 def test_unparsable_declaration_is_reported_once() -> None:
     facts = _facts(
         (".python-version", "3.11"),

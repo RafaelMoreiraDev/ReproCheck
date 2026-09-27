@@ -27,6 +27,20 @@ from reprocheck.checks.basic import (
     check_tests,
     check_workflows,
 )
+from reprocheck.checks.dependencies import (
+    RC200_CONFLICTING_PINS,
+    RC201_DISJOINT_CONSTRAINTS,
+    RC202_DUPLICATE_DECLARATION,
+    RC203_UNBOUNDED_RUNTIME,
+    RC204_MIXED_PINNING,
+    RC205_RUNTIME_DEV_DIVERGENCE,
+    RC206_MISSING_INCLUDE,
+    RC207_MISSING_CONSTRAINT_FILE,
+    RC208_EXTERNAL_REFERENCE,
+    RC209_MUTABLE_VCS_REFERENCE,
+    RC210_LOCAL_PATH_DEPENDENCY,
+    check_dependency_declarations,
+)
 from reprocheck.checks.gitignore import (
     RC140_ARTIFACTS_NOT_IGNORED,
     check_gitignore_artifacts,
@@ -83,6 +97,7 @@ ALL_CHECKS: tuple[Check, ...] = (
     check_absolute_paths,
     check_missing_local_paths,
     check_gitignore_artifacts,
+    check_dependency_declarations,
 )
 
 
@@ -121,6 +136,17 @@ __all__ = [
     "RC131_MISSING_SCRIPT",
     "RC132_MISSING_DIRECTORY",
     "RC140_ARTIFACTS_NOT_IGNORED",
+    "RC200_CONFLICTING_PINS",
+    "RC201_DISJOINT_CONSTRAINTS",
+    "RC202_DUPLICATE_DECLARATION",
+    "RC203_UNBOUNDED_RUNTIME",
+    "RC204_MIXED_PINNING",
+    "RC205_RUNTIME_DEV_DIVERGENCE",
+    "RC206_MISSING_INCLUDE",
+    "RC207_MISSING_CONSTRAINT_FILE",
+    "RC208_EXTERNAL_REFERENCE",
+    "RC209_MUTABLE_VCS_REFERENCE",
+    "RC210_LOCAL_PATH_DEPENDENCY",
     "Check",
     "Facts",
     "Finding",

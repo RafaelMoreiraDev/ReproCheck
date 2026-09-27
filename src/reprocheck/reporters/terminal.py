@@ -29,6 +29,9 @@ _CATEGORY_LABEL = {
     "vcs": ".gitignore",
 }
 
+#: Findings of this category are listed in their own terminal section.
+DEPENDENCY_CATEGORY = "dependencies"
+
 
 def format_report(report: ScanReport, output: str, verbose: bool = False) -> str:
     """Render a compact human-readable summary of ``report``."""
@@ -67,11 +70,32 @@ def format_report(report: ScanReport, output: str, verbose: bool = False) -> str
         lines.extend(_verbose_sections(report))
     lines.append("")
 
-    lines.extend(_findings_section(report.findings))
+    lines.extend(_dependency_section(report))
+    lines.append("")
+
+    general = [item for item in report.findings if item.category != DEPENDENCY_CATEGORY]
+    dependency = [
+        item for item in report.findings if item.category == DEPENDENCY_CATEGORY
+    ]
+    lines.extend(_findings_section(general))
+    lines.append("")
+    lines.extend(_findings_section(dependency, title="Dependency findings"))
     lines.append("")
     lines.append("Report:")
     lines.append(f"  {output}")
     return "\n".join(lines)
+
+
+def _dependency_section(report: ScanReport) -> list[str]:
+    summary = report.dependencies.get("summary") or {}
+    if not summary.get("unique_packages"):
+        return []
+    lines = ["Dependencies"]
+    for key in ("runtime", "dev", "test", "optional", "build", "constraint"):
+        if summary.get(key):
+            lines.append(f"  {key}: {summary[key]}")
+    lines.append(f"  unique: {summary.get('unique_packages', 0)}")
+    return lines
 
 
 def _verbose_sections(report: ScanReport) -> list[str]:
@@ -106,9 +130,9 @@ def _verbose_sections(report: ScanReport) -> list[str]:
     return lines
 
 
-def _findings_section(findings: list[Finding]) -> list[str]:
+def _findings_section(findings: list[Finding], title: str = "Findings") -> list[str]:
     counts = Counter(finding.severity for finding in findings)
-    lines = ["Findings"]
+    lines = [title]
     for severity in _SEVERITY_ORDER:
         lines.append(f"  {counts.get(severity, 0)} {_SEVERITY_PLURAL[severity]}")
     if not findings:

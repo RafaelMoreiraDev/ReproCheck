@@ -102,6 +102,33 @@ def test_readme_commands_are_not_executed(make_project, tmp_path) -> None:
     assert not canary.exists()
 
 
+def test_dependency_audit_does_not_touch_the_project(make_project) -> None:
+    """Scanning dependency declarations must not modify anything."""
+    root = make_project(
+        {
+            "pyproject.toml": (
+                "[project]\n"
+                "name = 'x'\n"
+                "dependencies = ['numpy==1.23.5', 'pandas==2.0.0', 'requests']\n"
+                "[dependency-groups]\n"
+                "dev = ['numpy==2.0.0']\n"
+                "[build-system]\n"
+                "requires = ['setuptools>=67']\n"
+            ),
+            "requirements.txt": "-r missing/base.txt\n-c also-missing.txt\n",
+            "requirements-dev.txt": "numpy>=2\n",
+            "a.py": "",
+        }
+    )
+    before = fingerprint(root)
+
+    report = scan(root)
+    ids = {finding.id for finding in report.findings}
+
+    assert {"RC200", "RC203", "RC204", "RC206", "RC207"} <= ids
+    assert fingerprint(root) == before
+
+
 def test_consistency_checks_do_not_touch_the_project(make_project) -> None:
     """A project that triggers every new check must stay byte-identical."""
     root = make_project(

@@ -128,6 +128,124 @@ class ToolSignal:
         return {"name": self.name, "evidence": self.evidence, "source": self.source}
 
 
+# --------------------------------------------------------------------------- #
+# Dependency declarations
+# --------------------------------------------------------------------------- #
+
+# Dependency kinds.
+KIND_RUNTIME = "runtime"
+KIND_DEV = "dev"
+KIND_TEST = "test"
+KIND_OPTIONAL = "optional"
+KIND_BUILD = "build"
+KIND_CONSTRAINT = "constraint"
+
+# Where a declaration was read from.
+DEP_SOURCE_PYPROJECT = "pyproject"
+DEP_SOURCE_REQUIREMENTS = "requirements"
+DEP_SOURCE_DEPENDENCY_GROUP = "dependency-group"
+DEP_SOURCE_BUILD_SYSTEM = "build-system"
+DEP_SOURCE_POETRY = "poetry"
+DEP_SOURCE_CONSTRAINT = "constraint"
+
+# How a dependency is obtained when it is not a registry name.
+REF_URL = "url"
+REF_VCS = "vcs"
+REF_LOCAL_PATH = "local-path"
+
+
+@dataclass(frozen=True, slots=True)
+class DependencyDeclaration:
+    """A dependency exactly as the project declares it.
+
+    Nothing is judged here: a declaration always keeps the raw text it came
+    from, so a check can quote it verbatim.
+    """
+
+    name: str
+    raw_name: str
+    specifier: str = ""
+    source: str = DEP_SOURCE_PYPROJECT
+    group: str = KIND_RUNTIME
+    kind: str = KIND_RUNTIME
+    marker: str | None = None
+    extras: tuple[str, ...] = ()
+    file: str | None = None
+    line: int | None = None
+    raw: str = ""
+    reference: str | None = None
+    reference_kind: str | None = None
+    vcs_ref: str | None = None
+    vcs_commit: str | None = None
+
+    @property
+    def is_pinned(self) -> bool:
+        """True when the specifier contains an exact ``==`` pin."""
+        return any(
+            part.strip().startswith("==")
+            for part in self.specifier.split(",")
+            if part.strip()
+        )
+
+    @property
+    def is_bounded(self) -> bool:
+        """True when any version constraint is present."""
+        return bool(self.specifier.strip())
+
+    @property
+    def is_conditional(self) -> bool:
+        """True when an environment marker makes the declaration conditional."""
+        return bool(self.marker)
+
+    @property
+    def is_external(self) -> bool:
+        """True when the dependency is not resolved from a package index."""
+        return self.reference_kind is not None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "raw_name": self.raw_name,
+            "specifier": self.specifier,
+            "source": self.source,
+            "group": self.group,
+            "kind": self.kind,
+            "marker": self.marker,
+            "extras": list(self.extras),
+            "file": self.file,
+            "line": self.line,
+            "raw": self.raw,
+            "reference": self.reference,
+            "reference_kind": self.reference_kind,
+            "vcs_ref": self.vcs_ref,
+            "vcs_commit": self.vcs_commit,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RequirementsInclude:
+    """A ``-r``/``--requirement`` or ``-c``/``--constraint`` reference."""
+
+    include_kind: str  # "include" | "constraint"
+    value: str
+    file: str
+    line: int
+    resolved: str | None = None
+    exists: bool | None = None
+    skipped_reason: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "include_kind": self.include_kind,
+            "value": self.value,
+            "file": self.file,
+            "line": self.line,
+            "resolved": self.resolved,
+            "exists": self.exists,
+            "skipped_reason": self.skipped_reason,
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class GitignoreInfo:
     """The parsed content of the project ``.gitignore``."""
@@ -169,6 +287,8 @@ class Facts:
     tools: list[ToolSignal] = field(default_factory=list)
     distribution_name: str | None = None
     declared_dependencies: tuple[str, ...] = ()
+    dependency_declarations: list[DependencyDeclaration] = field(default_factory=list)
+    requirement_includes: list[RequirementsInclude] = field(default_factory=list)
     gitignore: GitignoreInfo = field(default_factory=GitignoreInfo)
 
     def has_file(self, relative: str) -> bool:
