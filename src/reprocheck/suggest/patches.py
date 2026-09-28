@@ -44,6 +44,12 @@ def unified(
     final newline invisible. A diff that hides it would produce a broken patch,
     so a sentinel line is added on each side that lacks one and replaced by the
     conventional ``\\ No newline at end of file`` marker afterwards.
+
+    When the file uses CRLF, the carriage return is written back into the body
+    lines, exactly as ``git diff`` does with ``core.autocrlf`` disabled. A patch
+    that dropped it would still be *accepted* by ``git apply`` on a CRLF file and
+    would silently rewrite it with LF endings, which is not a change anybody
+    reviewed. The headers and the marker never carry the carriage return.
     """
     before_lines = _with_sentinel(before)
     after_lines = _with_sentinel(after)
@@ -57,7 +63,26 @@ def unified(
             n=context,
         )
     )
-    return "\n".join(_fix_counts(_restore_markers(lines)))
+    lines = _fix_counts(_restore_markers(lines))
+    if "\r\n" in before or "\r\n" in after:
+        lines = _restore_carriage_returns(lines)
+    return "\n".join(lines)
+
+
+def _restore_carriage_returns(lines: list[str]) -> list[str]:
+    """Put the CR of a CRLF file back into the hunk body only."""
+    result: list[str] = []
+    in_hunk = False
+    for line in lines:
+        if line.startswith("@@"):
+            in_hunk = True
+            result.append(line)
+            continue
+        if in_hunk and line[:1] in {" ", "+", "-"}:
+            result.append(line + "\r")
+            continue
+        result.append(line)
+    return result
 
 
 def _with_sentinel(content: str) -> list[str]:

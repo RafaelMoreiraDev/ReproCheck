@@ -991,6 +991,34 @@ implementation.
 real external repository, including the problems it does **not** detect, and
 `docs/reproduction-safety.md` documents the isolation model and its limits.
 
+## Validated on real-world projects
+
+ReproCheck has been run against five public repositories at a fixed commit, each
+cloned outside this repository and left untouched (`git status --porcelain` was 0
+lines before and after every run). The full evidence, including the
+classification of every warning and the gaps that were found, is in
+`docs/external-validation.md`.
+
+| Project | Commit | Python files | Scan | Suggest | Reproduce |
+| --- | --- | --- | --- | --- | --- |
+| [pint](https://github.com/hgrecco/pint) | `e4042bbe5c66` | 110 | 0.53 s, 0 errors, 12 warnings | 1 safe, 7 review, 2 manual | fails: version comes from Git metadata |
+| [tqdm](https://github.com/tqdm/tqdm) | `9cf5a12b1f95` | 68 | 0.36 s, 0 errors, 11 warnings | 1 safe, 9 review, 2 manual | fails: version comes from Git metadata |
+| [astropy](https://github.com/astropy/astropy) | `592070633f16` | 1006 | 3.80 s, 0 errors, 9 warnings | 1 safe, 0 review, 4 manual | fails: version comes from Git metadata |
+| [mne-python](https://github.com/mne-tools/mne-python) | `47d5be239f12` | 929 | 11.06 s, 0 errors, 38 warnings | 1 safe, 26 review, 3 manual | fails: version comes from Git metadata |
+| [napari](https://github.com/napari/napari) | `4b1f6dd779c6` | 1029 | 2.20 s, 0 errors, 8 warnings | 1 safe, 3 review, 2 manual | installed, `pip check` clean, 2 modules imported |
+
+Five scans, five suggests and eleven reproductions produced **no crash, no
+traceback and no unexpected write**. All 78 warnings were reviewed against the
+cited source; six classes of false positive were found and fixed, each with a
+regression test, and one `SAFE` suggestion proved lossy for CRLF files and was
+fixed too. A project that fails to install is a fact about that project, not
+about ReproCheck: the four failures above all say the same true thing, that a
+copy without `.git` cannot derive a version from tags.
+
+This is a validation on five repositories at one point in time. It is **not** a
+claim of compatibility with every Python project, and it says nothing about
+whether any of these projects reproduces its own results.
+
 ## Current limitations
 
 - Python projects only.
@@ -1083,6 +1111,18 @@ real external repository, including the problems it does **not** detect, and
   changed after the fix, which means a manual review is needed in that case.
 - A `ROLLBACK_FAILED` leaves the file in an unknown state on purpose: the report
   and the backup path are the only way out, and hiding it would be worse.
+- `setup.py` is a real build for some projects (astropy compiles C extensions
+  through it) and is not parsed: its dependencies and its extension step are
+  invisible.
+- CI outside GitHub Actions is not inspected. `azure-pipelines.yml` and
+  `.circleci/` are not read, so SHA pinning is not verified there.
+- Every project in the external validation derives its version from Git
+  metadata, so a copy without `.git` cannot be installed at all. This is the
+  single most common reproducibility obstacle found so far.
+- No dynamic step of the validation was isolated at the operating-system level:
+  the build backends ran with the current user's privileges.
+- Only `pyproject.toml`-based projects were validated. A `setup.py`-only or
+  `setup.cfg`-based distribution is a blind spot none of the five exercises.
 - No AI, no auto-fix and no scoring. The recommendations are static sentences
   attached to finding IDs, not advice derived from the project, the suggestions
   come from a fixed rule table, and the writes come from a named suggestion the

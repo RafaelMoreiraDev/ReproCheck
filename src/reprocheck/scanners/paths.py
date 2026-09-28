@@ -34,14 +34,33 @@ _WINDOWS_ABS_RE = re.compile(r"(?<![\w])(?P<value>[A-Za-z]:[\\/][^\s\"'<>|,;)\]]
 _UNIX_HOME_RE = re.compile(r"(?<![\w/])(?P<value>/(?:home|Users)/[^\s\"'<>|,;)\]]*)")
 
 # File-reading calls with a literal path argument.
+#
+# The call name must not be the tail of another identifier: ``yaml.safe_load``
+# and ``Path.joinpath`` are not file reads of their first argument. A dot is
+# allowed before the name, so ``np.load`` and ``io.open`` still match.
+#
+# ``Path`` itself is deliberately absent: it is a path *constructor*, and
+# ``Path("out.png").unlink()`` says nothing about a missing input file.
 _CALL_RE = re.compile(
-    r"""(?P<call>open|Path|read_csv|read_json|read_parquet|read_excel|load|loadtxt)"""
+    r"""(?<![A-Za-z0-9_])(?P<call>open|read_csv|read_json|read_parquet|read_excel"""
+    r"""|load|loadtxt|loadmat)"""
     r"""\s*\(\s*(?P<quote>["'])(?P<value>[^"'\n]+)(?P=quote)""",
     re.IGNORECASE,
 )
 
 # Values that are not repository-relative filesystem paths.
 _NOT_A_PATH_RE = re.compile(r"[$~<>*?{}|;]|^https?://|^file://|://")
+
+
+def _is_comment_line(line: str) -> bool:
+    """Return ``True`` for a line whose first characters are a comment marker.
+
+    Commented-out code is not executed, so a literal inside it is not a
+    reference the project makes. The marker has to be the first non-space
+    character, which keeps a ``#`` inside a string on the same line.
+    """
+    stripped = line.lstrip()
+    return stripped.startswith("#") or stripped.startswith("//")
 
 
 def scan_paths(root: Path) -> tuple[list[AbsolutePathRef], list[FileReference]]:
@@ -90,6 +109,11 @@ def _absolute_refs(relative: str, text: str) -> list[AbsolutePathRef]:
         ):
             for match in pattern.finditer(line):
                 value = match.group("value").rstrip(".,;:")
+                # Braces are a template placeholder, never a path: found while
+                # validating on real projects, ``didn't:\n{key}`` in a message
+                # was reported as a Windows drive.
+                if "{" in value or "}" in value:
+                    continue
                 if not _has_path_tail(value):
                     continue
                 found.append(AbsolutePathRef(value, style, relative, number))
@@ -97,15 +121,27 @@ def _absolute_refs(relative: str, text: str) -> list[AbsolutePathRef]:
 
 
 def _has_path_tail(value: str) -> bool:
-    """Require at least one path component after the drive or home prefix."""
+    """Require a real path component right after the drive or home prefix.
+
+    A single character is not a name: found while validating on real projects,
+    the apostrophe of a prose contraction (``didn't:\\n``) and a format
+    placeholder (``%s:\\n``) were both read as a Windows drive, because the
+    character that follows the colon is an escape, not a directory.
+    """
     stripped = re.sub(r"^[A-Za-z]:[\\/]|^/(?:home|Users)/", "", value)
-    return len(stripped.strip("/\\")) >= 1
+    segments = [item for item in re.split(r"[\\/]", stripped) if item]
+    return bool(segments) and len(segments[0]) >= 2
 
 
 def _file_refs(root: Path, path: Path, relative: str, text: str) -> list[FileReference]:
     found: list[FileReference] = []
     for number, line in enumerate(text.splitlines(), start=1):
+        if _is_comment_line(line):
+            continue
         for match in _CALL_RE.finditer(line):
+            call = match.group("call")
+            if not _is_reading_call(line, match, call):
+                continue
             value = match.group("value").strip()
             if not _is_repository_relative(value):
                 continue
@@ -113,7 +149,7 @@ def _file_refs(root: Path, path: Path, relative: str, text: str) -> list[FileRef
             exists = _exists(root, path, value)
             found.append(
                 FileReference(
-                    call=match.group("call"),
+                    call=call,
                     value=value,
                     file=relative,
                     line=number,
@@ -122,6 +158,32 @@ def _file_refs(root: Path, path: Path, relative: str, text: str) -> list[FileRef
                 )
             )
     return found
+
+
+def _is_reading_call(line: str, match: re.Match[str], call: str) -> bool:
+    """Return ``True`` when the call really reads a file.
+
+    Two shapes are rejected, both found while validating on real projects:
+
+    ``viewer.open('x.tif')``
+        a project API that happens to be called ``open``. Only the builtin and
+        ``io.open`` read, because every reader method (``pd.read_csv``,
+        ``np.load``) is normally reached through its module;
+    ``open('rv.input', 'w')``
+        a file being **written**, not read.
+    """
+    if call.lower() == "open":
+        start = match.start("call")
+        if (
+            line[start - 1 : start] == "."
+            and line[max(0, start - 3) : start - 1] != "io"
+        ):
+            return False
+        rest = line[match.end() :]
+        mode = re.match(r"""\s*,\s*(?P<quote>["'])(?P<mode>[^"']*)(?P=quote)""", rest)
+        if mode and set(mode.group("mode")) & set("wax+"):
+            return False
+    return True
 
 
 def _is_repository_relative(value: str) -> bool:

@@ -551,6 +551,54 @@ def test_git_apply_accepts_the_generated_diff(
     assert checked.returncode == 0, checked.stderr
 
 
+@pytest.mark.skipif(not GIT_AVAILABLE, reason="git is not installed")
+@pytest.mark.parametrize(
+    "content",
+    [b"__pycache__/\n", b"__pycache__/\r\n*.pyc\r\n", b"__pycache__/\n*.pyc"],
+    ids=["lf", "crlf", "no-final-newline"],
+)
+def test_git_apply_reproduces_the_proposed_bytes(
+    make_project, tmp_path, monkeypatch, content: bytes
+) -> None:
+    """A CRLF file needs the carriage return inside the diff body.
+
+    Without it the patch is still *accepted* and silently rewrites a CRLF file
+    with LF endings, which is a change nobody reviewed.
+    """
+    _state(tmp_path, monkeypatch)
+    root = _project(make_project, name=f"bytes-{len(content)}-{content[-1:]!r}")
+    (root / ".gitignore").write_bytes(content)
+    dry = run_fix(root, RC140)
+    work = tmp_path / "work"
+    (work / ".gitignore").parent.mkdir(parents=True, exist_ok=True)
+    (work / ".gitignore").write_bytes(content)
+    run_git(work, "init", "-b", "main")
+    patch = tmp_path / "proposal.patch"
+    patch.write_text((dry.unified_diff or "") + "\n", encoding="utf-8", newline="\n")
+
+    # Line-ending conversion is disabled: the result must then be the bytes the
+    # rule proposed, and nothing else.
+    applied = subprocess.run(
+        [
+            "git",
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "core.eol=lf",
+            "-C",
+            str(work),
+            "apply",
+            str(patch),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert applied.returncode == 0, applied.stderr
+    assert sha256((work / ".gitignore").read_bytes()) == dry.after_sha256
+
+
 # --------------------------------------------------------------------------- #
 # 14. rollback
 # --------------------------------------------------------------------------- #
@@ -835,6 +883,17 @@ def test_cli_missing_path_is_operational(tmp_path, capsys) -> None:
 
     assert code == EXIT_OPERATIONAL
     assert "error" in capsys.readouterr().err
+
+
+def test_cli_rejects_apply_with_rollback(tmp_path, capsys) -> None:
+    """`--apply` is meaningless on a rollback: a rollback already writes."""
+    code = main(["fix", str(tmp_path), "--rollback", "some-record", "--apply"])
+
+    assert code == EXIT_OPERATIONAL
+    assert (
+        "--apply cannot be used with --rollback; rollback is already an explicit "
+        "write operation." in capsys.readouterr().err
+    )
 
 
 def test_cli_requires_a_target(tmp_path, capsys) -> None:

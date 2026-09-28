@@ -491,6 +491,13 @@ def _run_suggest(args: argparse.Namespace) -> int:
 
 def _run_fix(args: argparse.Namespace) -> int:
     """Show or apply one suggestion, or undo one recorded application."""
+    if args.rollback and args.apply:
+        print(
+            "reprocheck: error: --apply cannot be used with --rollback; rollback "
+            "is already an explicit write operation.",
+            file=sys.stderr,
+        )
+        return EXIT_OPERATIONAL
     try:
         if args.rollback:
             result = run_rollback(args.path, args.rollback)

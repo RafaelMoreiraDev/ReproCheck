@@ -137,3 +137,25 @@ def test_reference_facts_are_reported(make_project) -> None:
             "line": 4,
         }
     ]
+
+
+def test_an_install_from_a_url_is_not_a_missing_file(make_project) -> None:
+    """A documented ``pip install <url>`` is an install, not a repository file.
+
+    Found while validating on real projects: the archive URL of a development
+    install was reported as a requirements file that does not exist.
+    """
+    root = make_project(
+        {
+            "README.rst": (
+                "Install\n"
+                "-------\n"
+                "\n"
+                ".. code-block:: console\n"
+                "\n"
+                "    $ pip install --upgrade "
+                "https://github.com/o/r/archive/refs/heads/main.zip\n"
+            )
+        }
+    )
+    assert _ids(root) & {"RC130", "RC131", "RC132"} == set()

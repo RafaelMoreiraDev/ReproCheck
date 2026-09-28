@@ -176,8 +176,15 @@ def _is_directory_like(value: str) -> bool:
 
 
 def _is_safe_value(value: str) -> bool:
-    """Reject globs, environment variables, URLs and the current directory."""
+    """Reject globs, environment variables, URLs and the current directory.
+
+    A URL is rejected here as well: ``pip install --upgrade
+    https://host/project/archive/main.zip`` documents an install, not a file
+    that should be in the repository.
+    """
     if not value or _UNSAFE_VALUE_RE.search(value):
+        return False
+    if "://" in value:
         return False
     if value.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:[\\/]", value):
         return False
