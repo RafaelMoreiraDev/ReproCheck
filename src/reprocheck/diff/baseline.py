@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from reprocheck.diff.models import ReportIdentity
+from reprocheck.output import project_identity
 from reprocheck.scanner import REPORT_SCHEMA_VERSION
 
 BASELINE_SCHEMA_VERSION = "1"
@@ -51,6 +52,10 @@ _MINIMUM_REPORT_KEYS = ("reprocheck_version", "report_schema_version", "project"
 
 class BaselineError(Exception):
     """Raised when a baseline or report cannot be accepted."""
+
+
+class IdentityError(BaselineError):
+    """Raised when the two reports describe different projects."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,3 +215,38 @@ def build_baseline(report: dict, source: str | Path | None = None) -> Baseline:
         report=validate_report(report, str(source or "the given report")),
         source=str(source) if source else None,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Project identity
+# --------------------------------------------------------------------------- #
+
+
+def ensure_same_project(baseline: dict, current: dict) -> None:
+    """Refuse a comparison between two different projects.
+
+    The identity is the normalised absolute path of the analysed project -- the
+    same string the state directory is named after, so the two can never
+    disagree. The Git HEAD is not part of the identity because it changes on
+    every commit, and the project name alone is not enough because two
+    repositories can share it.
+
+    There is no override in V0.9: a comparison between two projects is a
+    mistake, and a mistake should stop the command.
+    """
+    baseline_path = (baseline.get("project") or {}).get("path")
+    current_path = (current.get("project") or {}).get("path")
+    if not baseline_path or not current_path:
+        missing = "baseline" if not baseline_path else "current"
+        raise IdentityError(
+            f"the {missing} report has no project path, so it cannot be proven to "
+            f"describe the same project as the other one; re-run ReproCheck on "
+            f"the project to produce a report with a path"
+        )
+    if project_identity(baseline_path) != project_identity(current_path):
+        raise IdentityError(
+            f"refusing to compare two different projects: the baseline describes "
+            f"{baseline_path} and the current report describes {current_path}. "
+            f"Use two reports of the same project, or save a new baseline for "
+            f"this one"
+        )

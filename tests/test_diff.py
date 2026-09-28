@@ -8,6 +8,7 @@ never touches a file beyond the destinations it was given.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -24,7 +25,9 @@ from reprocheck.cli import EXIT_OK, EXIT_OPERATIONAL, main
 from reprocheck.diff import (
     BaselineError,
     ChangeKind,
+    IdentityError,
     compare_reports,
+    ensure_same_project,
     load_baseline,
     load_report,
     save_baseline,
@@ -35,6 +38,7 @@ from reprocheck.output import (
     BASELINE_NAME,
     DIFF_NAME,
     REPORT_NAME,
+    project_identity,
     project_output_dir,
     state_dir,
 )
@@ -737,6 +741,91 @@ def test_bare_report_is_accepted_as_a_baseline(tmp_path) -> None:
 
     assert baseline.identity.name == "demo"
     assert baseline.saved_at is None
+
+
+# --------------------------------------------------------------------------- #
+# 15b. project identity
+# --------------------------------------------------------------------------- #
+
+
+def test_same_project_compares(tmp_path) -> None:
+    baseline = _baseline_file(tmp_path, report_document())
+
+    diff = compare_reports(load_baseline(baseline).report, report_document())
+
+    assert diff.material_change_count == 0
+
+
+def test_different_projects_are_refused() -> None:
+    other = report_document()
+    other["project"]["path"] = "C:/tmp/other-project"
+
+    with pytest.raises(IdentityError) as excinfo:
+        ensure_same_project(report_document(), other)
+
+    message = str(excinfo.value)
+    assert "two different projects" in message
+    assert "C:/tmp/demo" in message
+    assert "C:/tmp/other-project" in message
+    assert "override" not in message.lower()
+
+
+def test_identity_ignores_the_project_name_but_not_the_path() -> None:
+    renamed = report_document()
+    renamed["project"]["name"] = "another-name"
+    renamed["project"]["path"] = "C:/tmp/demo"  # same directory
+
+    ensure_same_project(report_document(), renamed)
+
+
+def test_identity_is_case_insensitive_on_windows() -> None:
+    other = report_document()
+    other["project"]["path"] = "C:\\TMP\\Demo"
+
+    ensure_same_project(report_document(), other)
+
+
+def test_identity_ignores_the_git_head() -> None:
+    other = report_document()
+    other["git"]["head"] = "f" * 40
+
+    ensure_same_project(report_document(), other)
+
+
+def test_report_without_a_path_is_refused() -> None:
+    anonymous = report_document()
+    anonymous["project"]["path"] = None
+
+    with pytest.raises(IdentityError) as excinfo:
+        ensure_same_project(anonymous, report_document())
+    assert "no project path" in str(excinfo.value)
+
+
+def test_cli_refuses_two_different_projects(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("REPROCHECK_STATE_DIR", str(tmp_path / "state"))
+    baseline = _baseline_file(tmp_path, report_document())
+    other = report_document()
+    other["project"]["path"] = str(tmp_path / "elsewhere")
+    current = _write(tmp_path / "other.json", other)
+
+    code = main(["baseline", "compare", str(baseline), str(current)])
+
+    assert code == EXIT_OPERATIONAL
+    assert "refusing to compare two different projects" in capsys.readouterr().err
+
+
+def test_project_identity_drives_the_state_directory(tmp_path, monkeypatch) -> None:
+    """The comparison identity and the state directory cannot disagree."""
+    monkeypatch.setenv("REPROCHECK_STATE_DIR", str(tmp_path / "state"))
+    project = tmp_path / "the-project"
+    project.mkdir()
+
+    directory = project_output_dir(project)
+    identity = project_identity(project)
+
+    assert hashlib.sha256(identity.encode("utf-8")).hexdigest()[:8] in directory.name
+    assert project_output_dir(project) == directory
+    assert project_output_dir(tmp_path / "other") != directory
 
 
 # --------------------------------------------------------------------------- #

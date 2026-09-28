@@ -49,7 +49,7 @@ def utc_timestamp() -> str:
 
 def scan(path: str | Path) -> ScanReport:
     """Scan ``path`` in read-only mode and return a :class:`ScanReport`."""
-    return build_report(collect_facts(_resolve_target(path)))
+    return build_report(collect_facts(resolve_target(path)))
 
 
 def build_report(facts: Facts) -> ScanReport:
@@ -149,7 +149,8 @@ def _declared_names(declarations: list[DependencyDeclaration]) -> tuple[str, ...
     )
 
 
-def _resolve_target(path: str | Path) -> Path:
+def resolve_target(path: str | Path) -> Path:
+    "Return the absolute directory of an existing path, or raise ScanError."
     root = Path(path).expanduser()
     if not root.exists():
         raise ScanError(f"path does not exist: {root}")

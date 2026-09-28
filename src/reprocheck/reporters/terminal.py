@@ -9,6 +9,7 @@ from reprocheck.models import Finding, ScanReport, Severity
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     from reprocheck.diff.models import ReproducibilityDiff
+    from reprocheck.suggest.models import SuggestionReport
 
 _SEVERITY_LABEL = {
     Severity.ERROR: "ERROR",
@@ -378,3 +379,38 @@ def _diff_counts(diff: ReproducibilityDiff) -> list[str]:
     if diff.reproduction:
         lines.append(f"  {len(diff.reproduction)} reproduction fact change(s)")
     return lines
+
+
+# --------------------------------------------------------------------------- #
+# Fix suggestions
+# --------------------------------------------------------------------------- #
+
+
+def format_suggestions(
+    report: SuggestionReport, json_path: str, markdown_path: str
+) -> str:
+    """Render the suggestion summary for the terminal.
+
+    The line before the paths is not decoration: it is the only thing that tells
+    the reader the diff they are about to read was never applied.
+    """
+    summary = report.summary
+    lines = ["ReproCheck suggestions", ""]
+    lines.append(f"Safe fixes:       {summary.fix_available}")
+    lines.append(f"Review required:  {summary.review_required}")
+    lines.append(f"Manual only:      {summary.manual_only}")
+    lines.append(f"With a patch:     {summary.patches}")
+    lines.append(f"No proposal:      {summary.no_proposal}")
+    lines.append("")
+    for item in report.safe:
+        lines.append(f"  [{item.suggestion_id}] {item.title}")
+        if item.file:
+            lines.append(f"      file: {item.file}")
+    if report.safe:
+        lines.append("")
+    lines.append("No files were modified.")
+    lines.append("")
+    lines.append("Report:")
+    lines.append(f"  {json_path}")
+    lines.append(f"  {markdown_path}")
+    return "\n".join(lines)

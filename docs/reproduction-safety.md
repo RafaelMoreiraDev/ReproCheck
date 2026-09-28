@@ -167,6 +167,28 @@ operational errors use `3`. A failed attempt keeps its workspace and therefore
 its logs, exactly as before; nothing about the reproduction behaviour changed to
 produce a verdict.
 
+## What `suggest` does and does not do
+
+`reprocheck suggest` is a static scan followed by a rule table. Like `scan`, it
+is read-only by construction:
+
+- it never opens a file of the analysed project for writing, never renames and
+  never creates one, and it never creates a copy of the file next to the project;
+- a patch is built as two strings in memory -- the current content and the
+  proposed content -- and rendered as a unified diff;
+- it never applies anything: there is no `--apply`, no `reprocheck fix` and no
+  interactive prompt;
+- it runs no project code, resolves no dependency and makes no network request;
+- the fingerprint of the project, its Git HEAD and `git status --porcelain` are
+  unchanged by a run; the test suite asserts this by hashing every file before
+  and after.
+
+The one place where a patch would need care is a file whose bytes cannot be
+represented as text. A `.gitignore` with a byte-order mark or with non-UTF-8
+content gets **no** patch: the suggestion is downgraded to `REVIEW_REQUIRED`
+with the reason stated, because a `before` that does not match the file on disk
+produces a diff nobody can review.
+
 ## What a baseline comparison does and does not do
 
 `reprocheck baseline` is the only command family that reads two files instead of
@@ -178,6 +200,9 @@ analysing a directory, and it is the least invasive:
   code is executed by a comparison;
 - it **never** writes to a baseline unless `save` was asked to, and `save`
   refuses to replace an existing one without `--force`;
+- it **refuses** to compare two different projects, proved by the normalised
+  absolute path of the analysed directory. A moved project cannot be compared
+  with its own history, and there is no override in V0.9;
 - it makes no network request and installs nothing.
 
 The comparison is therefore safe to run on a report from an untrusted source, in

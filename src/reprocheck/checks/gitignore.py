@@ -31,16 +31,27 @@ PATTERN_EVIDENCE: dict[str, tuple[str, ...]] = {
 }
 
 
+def missing_artifact_patterns(facts: Facts) -> tuple[str, ...]:
+    """Ignore patterns the detected tools require and the file does not cover.
+
+    Shared with the suggestion engine, so a proposal can only ever contain a
+    pattern the check itself proved is missing.
+    """
+    if not facts.gitignore.exists:
+        return ()
+    return tuple(
+        sorted(
+            pattern
+            for pattern, requirements in PATTERN_EVIDENCE.items()
+            if not facts.gitignore.ignores(pattern)
+            and _has_evidence(facts, requirements)
+        )
+    )
+
+
 def check_gitignore_artifacts(facts: Facts) -> list[Finding]:
     """Report generated artifacts that the root ``.gitignore`` does not cover."""
-    if not facts.gitignore.exists:
-        return []
-
-    missing = sorted(
-        pattern
-        for pattern, requirements in PATTERN_EVIDENCE.items()
-        if not facts.gitignore.ignores(pattern) and _has_evidence(facts, requirements)
-    )
+    missing = missing_artifact_patterns(facts)
     if not missing:
         return []
 

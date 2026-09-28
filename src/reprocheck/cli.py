@@ -39,6 +39,7 @@ from reprocheck import __version__
 from reprocheck.diff import (
     BaselineError,
     compare_reports,
+    ensure_same_project,
     load_baseline,
     load_report,
     save_baseline,
@@ -50,13 +51,26 @@ from reprocheck.output import (
     DIFF_NAME,
     REPORT_MARKDOWN_NAME,
     REPORT_NAME,
+    SUGGESTIONS_MARKDOWN_NAME,
+    SUGGESTIONS_NAME,
     resolve_destination,
 )
 from reprocheck.reporters import format_report, write_markdown, write_report
 from reprocheck.reporters.diff import write_diff_json, write_diff_markdown
-from reprocheck.reporters.terminal import format_diff
+from reprocheck.reporters.suggestions import (
+    write_suggestions_json,
+    write_suggestions_markdown,
+)
+from reprocheck.reporters.terminal import format_diff, format_suggestions
 from reprocheck.reproduction.runner import ReproductionError, reproduce
-from reprocheck.scanner import ScanError, scan
+from reprocheck.scanner import (
+    ScanError,
+    build_report,
+    collect_facts,
+    resolve_target,
+    scan,
+)
+from reprocheck.suggest import suggest
 
 EXIT_OK = 0
 EXIT_PARTIAL = 1
@@ -133,6 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     _add_baseline_parsers(subparsers)
+    _add_suggest_parser(subparsers)
     return parser
 
 
@@ -214,6 +229,41 @@ def _add_baseline_parsers(subparsers) -> None:
     )
 
 
+def _add_suggest_parser(subparsers) -> None:
+    suggest = subparsers.add_parser(
+        "suggest",
+        help=(
+            "propose deterministic fixes for the findings of a static scan; "
+            "never modifies the analysed project"
+        ),
+    )
+    suggest.add_argument(
+        "path", metavar="<path>", help="path of the project to suggest for"
+    )
+    suggest.add_argument(
+        "--json",
+        metavar="<arquivo>",
+        default=None,
+        help=(
+            f"suggestion destination (default: the state directory, {SUGGESTIONS_NAME})"
+        ),
+    )
+    suggest.add_argument(
+        "--markdown",
+        metavar="<arquivo>",
+        default=None,
+        help=(
+            f"Markdown suggestion destination (default: {SUGGESTIONS_MARKDOWN_NAME})"
+        ),
+    )
+    suggest.add_argument(
+        "--output-dir",
+        metavar="<diretorio>",
+        default=None,
+        help="directory for both files when --json/--markdown are not given",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Commands
 # --------------------------------------------------------------------------- #
@@ -230,6 +280,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "save":
             return _run_baseline_save(args)
         return _run_baseline_compare(args)
+    if args.command == "suggest":
+        return _run_suggest(args)
     if args.command != "scan":  # pragma: no cover - argparse enforces this
         parser.print_help()
         return EXIT_USAGE
@@ -309,6 +361,7 @@ def _run_baseline_compare(args: argparse.Namespace) -> int:
     try:
         baseline = load_baseline(args.baseline)
         current = load_report(args.report)
+        ensure_same_project(baseline.report, current)
         diff = compare_reports(baseline.report, current)
         project = (current.get("project") or {}).get("path")
         json_destination = resolve_destination(
@@ -344,6 +397,40 @@ def _run_baseline_compare(args: argparse.Namespace) -> int:
             "  note: the baseline predates these report sections, which were not "
             f"compared: {', '.join(absent)}"
         )
+    return EXIT_OK
+
+
+def _run_suggest(args: argparse.Namespace) -> int:
+    """Propose fixes. Read-only: no file of the project is ever written."""
+    try:
+        facts = collect_facts(resolve_target(args.path))
+        report = build_report(facts)
+        proposals = suggest(facts, report)
+    except ScanError as exc:
+        print(f"reprocheck: error: {exc}", file=sys.stderr)
+        return EXIT_OPERATIONAL
+
+    try:
+        json_path = write_suggestions_json(
+            proposals,
+            resolve_destination(
+                args.json, SUGGESTIONS_NAME, args.output_dir, report.project.path
+            ),
+        )
+        markdown_path = write_suggestions_markdown(
+            proposals,
+            resolve_destination(
+                args.markdown,
+                SUGGESTIONS_MARKDOWN_NAME,
+                args.output_dir,
+                report.project.path,
+            ),
+        )
+    except OSError as exc:
+        print(f"reprocheck: error: could not write suggestions: {exc}", file=sys.stderr)
+        return EXIT_OPERATIONAL
+
+    print(format_suggestions(proposals, str(json_path), str(markdown_path)))
     return EXIT_OK
 
 

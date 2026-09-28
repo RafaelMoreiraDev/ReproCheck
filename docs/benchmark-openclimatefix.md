@@ -5,8 +5,8 @@ repository and is never modified: ReproCheck only reads it.
 
 - Target: `C:\Projetos\OpenClimateFix\open-source-quartz-solar-forecast`
 - Commit scanned: `c07ad7402598979a7cd3c2eab7430098a3d56e78` (branch `main`, clean)
-- ReproCheck version: `0.8.0` (TASK-008 report run; detection unchanged since V0.6)
-- Date: 2026-09-27
+- ReproCheck version: `0.9.0` (TASK-009 suggest run; detection unchanged since V0.6)
+- Date: 2026-09-28
 
 The `OCF-Bxx` list below is an **external benchmark only**. It was reconstructed by
 manual inspection of the target repository during TASK-002; it is not part of any
@@ -336,7 +336,66 @@ change there is a change in a fact, and the finding only changes when the check
 runs again. That is a real gap: a comparison cannot tell that the finding *would*
 disappear, because the report it reads is a snapshot, not a re-analysis.
 
+## Fix suggestions (V0.9)
+
+`reprocheck suggest` was run on the same commit, installation-free: it is a
+static scan plus a rule table, so nothing was installed, no project code ran and
+no network request was made.
+
+```
+findings examined  22
+SAFE               1
+REVIEW_REQUIRED    6
+MANUAL_ONLY        3
+patches            1
+no proposal        1  (RC115)
+informational     11
+```
+
+| Suggestion | Finding | Safety | Patch |
+| --- | --- | --- | --- |
+| FIX-RC116-001 | RC116 (uv without `uv.lock`) | `MANUAL_ONLY` | no |
+| FIX-RC140-001 | RC140 (artifacts not ignored) | **`SAFE`** | **yes** |
+| FIX-RC150-001 | RC150 (version from Git metadata) | `MANUAL_ONLY` | no |
+| FIX-RC203-001 | RC203 (5 unpinned runtime deps) | `MANUAL_ONLY` | no |
+| FIX-RC220-001…006 | RC220 (7 external refs on mutable tags) | `REVIEW_REQUIRED` | no |
+
+The exact proposed patch, produced in memory and **not applied**:
+
+```diff
+--- a/.gitignore
++++ b/.gitignore
+@@ -11,3 +11,9 @@
+ __pycache__/
+ .cache.sqlite
+ *.egg-info
++.mypy_cache/
++.pytest_cache/
++.ruff_cache/
++.venv/
++build/
++dist/
+```
+
+Six patterns, one hunk, one suggestion. The two patterns the file already covers
+for those directories (`__pycache__/` and `*.egg-info`) are not proposed again,
+and `.cache.sqlite` is untouched: no existing line is moved, reordered or
+removed.
+
+The honest part of this run is how little is fixable. Of the ten warnings, one
+has a deterministic patch. RC115 is declined with a stated reason. The five
+remaining RC220 references are `REVIEW_REQUIRED` because pinning them needs a
+commit SHA that only the network can supply, and RC116/RC150 are
+`MANUAL_ONLY` because the repair is a process decision. ReproCheck proposes
+nothing it cannot justify, which on a real repository means proposing very
+little.
+
+**The project was not modified.** `git status --porcelain` returned 0 lines and
+`HEAD` remained `c07ad7402598979a7cd3c2eab7430098a3d56e78` before and after the
+run, and the `.gitignore` on disk still ends at line 13.
+
 ## Read-only verification
+
 `git status --porcelain` returned 0 lines and `HEAD` remained
 `c07ad7402598979a7cd3c2eab7430098a3d56e78` before and after every scan and every
 reproduction attempt, including the one that installed 80 packages.

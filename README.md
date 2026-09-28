@@ -1,4 +1,4 @@
-# ReproCheck
+﻿# ReproCheck
 
 ReproCheck is a **read-only scanner for reproducibility** of Python projects.
 
@@ -17,7 +17,7 @@ a person can read without knowing any check ID.
 
 ## How it is organised
 
-ReproCheck separates four layers, and never mixes them:
+ReproCheck separates five layers, and never mixes them:
 
 | Layer | Question | Module |
 | --- | --- | --- |
@@ -25,11 +25,13 @@ ReproCheck separates four layers, and never mixes them:
 | **CHECK** | Which deterministic rule does that fact break? | `reprocheck.checks` |
 | **FINDING** | What can be stated, with which evidence and confidence? | `reprocheck.models.Finding` |
 | **VERDICT** | What do all of those facts add up to, and what is still unknown? | `reprocheck.models.verdict`, `reprocheck.checks.verdict` |
+| **SUGGESTION** | Is there a deterministic, safe change that would remove this finding? | `reprocheck.suggest` |
 
 A check is a pure function of the facts. It cannot read the filesystem, run code
 or guess: if a conclusion cannot be proven, no finding is emitted. The verdict is
 a pure derivation of the findings: it adds no new claim, and it never produces a
-numeric score.
+numeric score. A suggestion is a pure derivation of a finding and the facts it
+came from: it is never applied.
 
 
 ## `scan` is strictly read-only
@@ -72,6 +74,7 @@ python -m pip install -e ".[dev]"
 ```powershell
 reprocheck scan C:\Projetos\some-project
 reprocheck reproduce C:\Projetos\some-project --network --runtime-checks
+reprocheck suggest C:\Projetos\some-project
 reprocheck baseline save reprocheck-report.json --output baseline.json
 reprocheck baseline compare baseline.json reprocheck-report.json
 ```
@@ -81,6 +84,7 @@ or, without installing the console script:
 ```powershell
 python -m reprocheck scan C:\Projetos\some-project
 python -m reprocheck reproduce C:\Projetos\some-project
+python -m reprocheck suggest C:\Projetos\some-project
 python -m reprocheck baseline compare baseline.json reprocheck-report.json
 ```
 
@@ -94,7 +98,8 @@ python -m reprocheck baseline compare baseline.json reprocheck-report.json
 | `--verbose` | Also print HEAD, package manager hints and README commands |
 
 `reproduce` takes the same three destination options, plus `--network`,
-`--keep-workspace`, `--runtime-checks` and `--verbose`.
+`--keep-workspace`, `--runtime-checks` and `--verbose`. `suggest` takes the three
+destination options and nothing else — there is no `--apply`.
 
 ### Where files are written
 
@@ -113,6 +118,8 @@ sub-directory named after the analysed project:
 <state>/reprocheck/<name>-<8 hex of the project path>/reprocheck-diff.json
 <state>/reprocheck/<name>-<8 hex of the project path>/reprocheck-diff.md
 <state>/reprocheck/<name>-<8 hex of the project path>/baseline.json
+<state>/reprocheck/<name>-<8 hex of the project path>/reprocheck-suggestions.json
+<state>/reprocheck/<name>-<8 hex of the project path>/reprocheck-suggestions.md
 ```
 
 **Breaking change in V0.8:** V0.7 wrote the reports to the current working
@@ -124,16 +131,17 @@ working unchanged. The path of both files is always printed.
 
 ### Exit codes
 
-| Code | `scan` | `reproduce` | `baseline save` / `compare` |
-| --- | --- | --- | --- |
-| `0` | report written | verdict is `PASS` | done (a comparison returns `0` whether or not anything changed) |
-| `1` | — | verdict is `PARTIAL` | — |
-| `2` | — | verdict is `FAIL` | — |
-| `3` | path unusable, or a report could not be written | same | baseline missing, invalid, unknown schema, or refusing to overwrite |
+| Code | `scan` | `reproduce` | `suggest` | `baseline save` / `compare` |
+| --- | --- | --- | --- | --- |
+| `0` | report written | verdict is `PASS` | proposals written | done (a comparison returns `0` whether or not anything changed) |
+| `1` | — | verdict is `PARTIAL` | — | — |
+| `2` | — | verdict is `FAIL` | — | — |
+| `3` | path unusable, or a report could not be written | same | same | baseline missing, invalid, unknown schema, refusing to overwrite, or a different project |
 
 `2` is also what argparse uses for a malformed command line, which is why
 operational errors use `3`. A change is a fact, not an error: `compare` never
-signals "something changed" through the exit code.
+signals "something changed" through the exit code, and `suggest` never signals
+"there is something to fix" through it either.
 
 
 ### Example
@@ -379,7 +387,7 @@ No material reproducibility changes detected.
 
 ```json
 {
-  "reprocheck_version": "0.8.0",
+  "reprocheck_version": "0.9.0",
   "report_schema_version": "6",
 
   "scan_timestamp": "2026-01-01T12:00:00+00:00",
@@ -509,7 +517,7 @@ Abridged example:
 - Project: quartz-solar-forecast
 - Path: C:\Projetos\OpenClimateFix\open-source-quartz-solar-forecast
 - Scan time: 2026-09-27T16:31:04+00:00
-- ReproCheck version: 0.8.0
+- ReproCheck version: 0.9.0
 - Reproduction verdict: **PARTIAL**
 - Why:
   - 3 open warning(s): RC150, RC203, RC220
@@ -546,6 +554,98 @@ These were not checked. They are not failures: the result is unknown.
 - **RC150** — Reproduce with VCS metadata available if the exact package version matters, or record the released version explicitly.
 - **RC220** — Consider pinning the external GitHub Action/workflow to a full commit SHA if immutable CI inputs are required.
 ````
+
+## Suggest: deterministic fix proposals (V0.9)
+
+> **Suggest never modifies the analysed project.** It reads the project, builds
+> what a change *would* look like in memory, and writes the proposal to the state
+> directory. There is no `reprocheck fix`, no `--apply` and no prompt.
+
+```powershell
+reprocheck suggest C:\Projetos\some-project
+```
+
+```text
+ReproCheck suggestions
+
+Safe fixes:       1
+Review required:  6
+Manual only:      3
+With a patch:     1
+No proposal:      1
+
+  [FIX-RC140-001] Add the missing artifact patterns to .gitignore
+      file: .gitignore
+
+No files were modified.
+
+Report:
+  ...\reprocheck-suggestions.json
+  ...\reprocheck-suggestions.md
+```
+
+A finding never implies a fix. Every finding that is a problem gets exactly one
+of three answers, and the answer comes from a fixed table of rules: no model, no
+inference, no network.
+
+| Classification | Answer | Criteria |
+| --- | --- | --- |
+| `SAFE` | `FIX_AVAILABLE` | a local, additive, reversible text edit; no semantic choice; no logic touched; the result is unambiguous |
+| `REVIEW_REQUIRED` | `REVIEW_REQUIRED` | a concrete direction exists, but a value or a decision does not |
+| `MANUAL_ONLY` | `NO_AUTOFIX` | any patch would be speculation about the project |
+
+| Finding | Classification | Patch? | Why |
+| --- | --- | --- | --- |
+| RC140 | `SAFE` | yes | the patterns are proven missing by the check itself, and the edit only appends lines |
+| RC220 | `REVIEW_REQUIRED` | no | a pinned SHA is the answer, but which commit `v4` points at is external and temporal |
+| RC116 | `MANUAL_ONLY` | no | a lockfile resolves real dependencies against an index |
+| RC150 | `MANUAL_ONLY` | no | the fix is a release-process decision, and the fallback version is not derivable here |
+| RC203 | `MANUAL_ONLY` | no | a version bound is a maintenance decision; an invented pin is worse than none |
+| RC121 | `MANUAL_ONLY` | no | the correct path cannot be inferred |
+| RC130 / RC131 / RC132 | `MANUAL_ONLY` | no | ReproCheck cannot know whether the README or the referenced file is wrong |
+
+`SAFE` means the *change* is safe to review, not that a machine should apply it.
+Every suggestion carries `requires_user_approval: true`, and only a `SAFE`
+suggestion with a diff is marked as a candidate for a future automatic
+application.
+
+Only **RC140** produces a patch in V0.9, and it is one patch for the whole
+finding, not one per pattern:
+
+```diff
+--- a/.gitignore
++++ b/.gitignore
+@@ -11,3 +11,9 @@
+ __pycache__/
+ .cache.sqlite
+ *.egg-info
++.mypy_cache/
++.pytest_cache/
++.ruff_cache/
++.venv/
++build/
++dist/
+```
+
+The diff is a standard unified diff built in memory, with the line endings of
+the current file preserved and the conventional `\ No newline at end of file`
+marker when the file has no final newline. A `.gitignore` with a byte-order mark
+or with content that is not plain UTF-8 gets **no** patch: a proposal whose
+`before` cannot represent the current bytes exactly is not a proposal, it is a
+guess. A project with no `.gitignore` at all gets no RC140 proposal either, since
+creating one is a decision about the project.
+
+Applying a proposal by hand makes the suggestion disappear: the second run finds
+every pattern covered and proposes nothing. That is the intended behaviour and it
+is tested.
+
+`reprocheck-suggestions.json` records `suggestion_schema_version`, the project,
+the counts and one entry per suggestion (`suggestion_id`, `finding_id`, `kind`,
+`title`, `safety`, `confidence`, `file`, `description`, `rationale`, `before`,
+`after`, `unified_diff`, `requires_user_approval`, `can_auto_apply_later`,
+`limitations`), plus a `no_proposal` list so that a problem without a rule is
+visible instead of silently absent. Findings with no rule and `info` severity
+are counted as informational, because they are observations, not problems.
 
 ## Findings
 
@@ -835,22 +935,40 @@ real external repository, including the problems it does **not** detect, and
 - A comparison cannot tell *why* something changed. Two reports of the same
   commit on two machines can differ, and the diff reports the difference without
   attributing a cause.
+- The comparison requires both reports to describe the same project, proved by
+  the normalised absolute path. A project moved to another directory cannot be
+  compared with its own history, and there is no override.
 - Older baselines are accepted and normalised by absence, so a schema `1`
   baseline compares only the findings. Nothing is migrated or guessed.
 - Reports now go to a per-user state directory, which means two people do not
   share a baseline by default and a CI job needs `REPROCHECK_STATE_DIR` or an
   explicit path to keep one between runs.
+- `suggest` covers nine findings and produces exactly one kind of patch. Every
+  other finding is either declined with a stated reason or reported as
+  informational; nothing is patched speculatively, which also means the tool
+  cannot fix most of what it finds.
+- A suggestion is generated from the state of the repository at scan time. It
+  does not know whether a maintainer would accept the change, and `SAFE` says
+  nothing about that.
+- The RC140 patch appends patterns at the end of the file. It cannot insert them
+  in a logical section, add a comment, or normalise patterns it did not add.
+- `suggest` re-scans the project instead of reading a saved report, so
+  `reprocheck suggest --report` does not exist in V0.9.
 - No AI, no auto-fix and no scoring. The recommendations are static sentences
-  attached to finding IDs, not advice derived from the project. The network is
-  only used by an explicit `--network` during installation.
+  attached to finding IDs, not advice derived from the project, and the
+  suggestions come from a fixed rule table. The network is only used by an
+  explicit `--network` during installation.
 
 ## Roadmap
 
-- `0.9` — `setup.cfg`, `Pipfile` and Conda dependency sources, PEP 735
+- `0.10` - `setup.cfg`, `Pipfile` and Conda dependency sources, PEP 735
   `include-group` resolution, and non-Python ecosystems (Node).
-- later — an explicit opt-in mode that preserves Git metadata in the
+- later - an explicit opt-in mode that preserves Git metadata in the
   reproduction copy, so a tag-derived version can be reproduced, plus entry
   point based import discovery.
-- later — comparing more than two points in time, so a drift becomes a trend
+- later - comparing more than two points in time, so a drift becomes a trend
   instead of a pair.
+- later - applying a `SAFE` suggestion, always as an explicit, reviewable
+  action with the project fingerprinted before and after.
+
 

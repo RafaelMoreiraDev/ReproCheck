@@ -40,6 +40,8 @@ REPORT_MARKDOWN_NAME = "reprocheck-report.md"
 DIFF_NAME = "reprocheck-diff.json"
 DIFF_MARKDOWN_NAME = "reprocheck-diff.md"
 BASELINE_NAME = "baseline.json"
+SUGGESTIONS_NAME = "reprocheck-suggestions.json"
+SUGGESTIONS_MARKDOWN_NAME = "reprocheck-suggestions.md"
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -62,14 +64,32 @@ def state_dir() -> Path:
     return base / "reprocheck"
 
 
+def project_identity(project: str | Path) -> str:
+    """Return the stable identity of a project: its normalised absolute path.
+
+    This is the only identity available for a local project. The Git HEAD is
+    deliberately **not** part of it: a commit changes on every commit, so it
+    would make every comparison of the same project look like a different one.
+    The project name alone is not enough either: two repositories can share it.
+
+    ``project_output_dir`` derives its directory from this same string, so the
+    state directory and the identity check can never disagree.
+    """
+    resolved = Path(project).expanduser().resolve()
+    text = str(resolved)
+    if sys.platform == "win32":
+        text = text.replace("/", "\\").rstrip("\\").lower()
+    return text
+
+
 def project_output_dir(project: str | Path | None, *, root: Path | None = None) -> Path:
     """Return the default output directory for one analysed project."""
     base = root if root is not None else state_dir()
     if not project:
         return base
-    resolved = str(Path(project).expanduser().resolve())
-    digest = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:8]
-    name = _UNSAFE.sub("-", Path(resolved).name) or "project"
+    identity = project_identity(project)
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:8]
+    name = _UNSAFE.sub("-", Path(identity).name) or "project"
     return base / f"{name}-{digest}"
 
 

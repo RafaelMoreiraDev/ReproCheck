@@ -45,7 +45,8 @@ def check_workflow_references(facts: Facts) -> list[Finding]:
     ]
 
 
-def _origin(reference: WorkflowReference) -> str:
+def origin(reference: WorkflowReference) -> str:
+    "Return `file:line (job 'name')` for one reference, as evidence shows it."
     location = f"{reference.file}:{reference.line}"
     if reference.job:
         return f"{location} (job '{reference.job}')"
@@ -63,7 +64,7 @@ def _mutable_references(
         if reference.reference_type == REF_DOCKER:
             continue
         key = (reference.target, reference.ref or "")
-        grouped.setdefault(key, []).append(_origin(reference))
+        grouped.setdefault(key, []).append(origin(reference))
 
     findings: list[Finding] = []
     for (target, ref), locations in sorted(grouped.items()):
@@ -98,7 +99,7 @@ def _mutable_docker_references(
         if reference.reference_type != REF_DOCKER or reference.is_sha:
             continue
         key = (reference.target, reference.ref or "")
-        grouped.setdefault(key, []).append(_origin(reference))
+        grouped.setdefault(key, []).append(origin(reference))
 
     return [
         Finding(
@@ -125,7 +126,7 @@ def _inconsistent_refs(references: list[WorkflowReference]) -> list[Finding]:
             continue
         ref = reference.ref or ""
         by_target.setdefault(reference.target, {}).setdefault(ref, []).append(
-            _origin(reference)
+            origin(reference)
         )
 
     findings: list[Finding] = []
@@ -177,7 +178,7 @@ def _missing_local_references(
                 severity=Severity.WARNING,
                 category=CATEGORY,
                 message=(
-                    f"{_origin(reference)} references the local path "
+                    f"{origin(reference)} references the local path "
                     f"'{reference.target}', which does not exist in the "
                     f"repository; expected {expected}."
                 ),
