@@ -18,6 +18,9 @@ from reprocheck.fix.models import ApplicationRecord
 from reprocheck.output import project_output_dir
 
 RECORD_SUFFIX = ".json"
+#: Every record file starts with this, so a directory listing separates the
+#: audit trail from the backups that sit next to it.
+RECORD_PREFIX = "applied-"
 
 
 def records_dir(root: str | Path, *, state_dir: Path | None = None) -> Path:
@@ -28,7 +31,12 @@ def records_dir(root: str | Path, *, state_dir: Path | None = None) -> Path:
 def record_path(
     root: str | Path, record_id: str, *, state_dir: Path | None = None
 ) -> Path:
-    return records_dir(root, state_dir=state_dir) / f"{record_id}{RECORD_SUFFIX}"
+    name = (
+        record_id
+        if record_id.startswith(RECORD_PREFIX)
+        else f"{RECORD_PREFIX}{record_id}"
+    )
+    return records_dir(root, state_dir=state_dir) / f"{name}{RECORD_SUFFIX}"
 
 
 def write_record(

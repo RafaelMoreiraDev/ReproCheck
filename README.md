@@ -1,19 +1,158 @@
 ﻿# ReproCheck
 
-ReproCheck is a **read-only scanner for reproducibility** of Python projects.
+## What is ReproCheck?
 
-Given a project directory, it answers a single question with evidence:
+> ReproCheck audits whether a Python project can be reproduced, records evidence
+> about what works and what fails, and can propose — or safely apply — a small
+> set of deterministic fixes.
+
+It is a **read-only scanner for reproducibility**. Given a project directory, it
+answers one question with evidence:
 
 > If someone receives this repository today, is it possible to reconstruct the
 > exact environment that produced its results — and does the project itself say
 > how?
 
 Most "it works on my machine" problems are not code bugs. They are missing or
-contradictory facts: no pinned Python version, two competing package managers,
-a documented install command that no longer exists, an uncommitted working tree
-at the moment results were produced. ReproCheck collects those facts into a
-deterministic JSON report, and projects the same content into a Markdown report
-a person can read without knowing any check ID.
+contradictory facts: no pinned Python version, two competing package managers, a
+documented install command that no longer exists, a CI action referenced by a
+tag, an uncommitted working tree at the moment results were produced. ReproCheck
+collects those facts into a deterministic JSON report and projects the same
+content into a Markdown report a person can read without knowing any check ID.
+
+## Install
+
+```powershell
+python -m pip install reprocheck
+```
+
+Requires Python 3.11 or newer. The only runtime dependency is
+[`packaging`](https://pypi.org/project/packaging/).
+
+## The six commands
+
+```powershell
+# 1. static audit: reads the project, writes JSON + Markdown reports
+reprocheck scan .
+
+# 2. controlled installation in an isolated copy (see the safety note below)
+reprocheck reproduce .
+
+# 3. runtime checks: import the installed modules, collect the tests
+reprocheck reproduce . --runtime-checks
+
+# 4. deterministic fix suggestions, nothing is written
+reprocheck suggest .
+
+# 5. show exactly what would be written
+reprocheck fix . --suggestion FIX-RC140-001
+
+# 6. write it, verify it, and keep a record you can roll back
+reprocheck fix . --suggestion FIX-RC140-001 --apply
+```
+
+Reports go to a per-user state directory
+(`%LOCALAPPDATA%\reprocheck` on Windows, `~/.local/state/reprocheck` elsewhere),
+never inside the analysed project. Use `--json`, `--markdown` or `--output-dir`
+to choose a destination.
+
+Comparing two points in time:
+
+```powershell
+reprocheck baseline save .\report.json --output .\baseline.json
+reprocheck scan .
+reprocheck baseline compare .\baseline.json .\reprocheck-report.json
+```
+
+Each command writes two files, one JSON and one Markdown:
+
+```text
+reprocheck-report.json   the structured source of truth
+reprocheck-report.md     the same facts, for a person
+```
+
+Exit codes: `0` done, `1` verdict is `PARTIAL`, `2` verdict is `FAIL`, `3`
+operational error, `5` a fix was stale or not applicable, `6` a fix failed and
+was rolled back, `7` a rollback failed.
+
+## Safety
+
+This is part of the product, not a footnote.
+
+| Command | Runs the project's code? | Writes to the project? |
+| --- | --- | --- |
+| `scan` | **no** | no |
+| `suggest` | **no** | no |
+| `baseline compare` | **no** | no |
+| `reproduce` | yes — its build backend, in a copy | no |
+| `reproduce --runtime-checks` | yes — imports and `pytest --collect-only` | no |
+| `fix` (dry run) | no | no |
+| `fix --apply` | no | **yes**, one file, named by you |
+
+- `scan`, `suggest` and `baseline compare` never execute anything from the
+  analysed project, and never write inside it.
+- `reproduce` executes the project's build backend with your own privileges,
+  inside a workspace copy. `--runtime-checks` additionally imports the installed
+  package and lets pytest import `conftest.py`, plugins and test modules. No test
+  function is ever executed.
+- **A virtual environment is not a security sandbox.** Run untrusted code in a
+  container or a VM.
+- `fix` writes only for the suggestion id you type, only with `--apply`, only
+  for a `SAFE` suggestion, and only after checking that the file has not changed
+  since the proposal was built. Read `docs/reproduction-safety.md` first.
+
+## What ReproCheck is not
+
+- Not a tool that confirms **scientific results**. It never runs a study, a
+  benchmark or a model.
+- Not a container manager, and not an experiment tracker.
+- Not a universal dependency solver: it does not choose versions, and it never
+  picks one for you.
+- Not proof that a scientific study is reproducible.
+
+A `PASS` verdict means only that **the checks which ran succeeded**. Everything
+under **Not verified** — the full test suite, external datasets, remote URLs, CI
+action revisions, package index state — stays unknown, and the report says so.
+
+## Validated on real projects
+
+Five public repositories, one commit each, cloned outside this repository and
+left untouched. Full evidence, including every warning reviewed by hand:
+[`docs/external-validation.md`](docs/external-validation.md).
+
+| Project | Commit | Python files | Scan | Suggest | Reproduce |
+| --- | --- | --- | --- | --- | --- |
+| [pint](https://github.com/hgrecco/pint) | `e4042bbe5c66` | 110 | 0.53 s, 0 errors, 12 warnings | 1 safe, 7 review, 2 manual | fails: version comes from Git metadata |
+| [tqdm](https://github.com/tqdm/tqdm) | `9cf5a12b1f95` | 68 | 0.36 s, 0 errors, 11 warnings | 1 safe, 9 review, 2 manual | fails: version comes from Git metadata |
+| [astropy](https://github.com/astropy/astropy) | `592070633f16` | 1006 | 3.80 s, 0 errors, 9 warnings | 1 safe, 0 review, 4 manual | fails: version comes from Git metadata |
+| [mne-python](https://github.com/mne-tools/mne-python) | `47d5be239f12` | 929 | 11.06 s, 0 errors, 38 warnings | 1 safe, 26 review, 3 manual | fails: version comes from Git metadata |
+| [napari](https://github.com/napari/napari) | `4b1f6dd779c6` | 1029 | 2.20 s, 0 errors, 8 warnings | 1 safe, 3 review, 2 manual | installed, `pip check` clean, 2 modules imported |
+
+Five scans, five suggests and eleven reproductions produced **no crash, no
+traceback and no unexpected write**: every clone finished with a clean
+`git status`. All 78 warnings were reviewed against the cited source, six
+classes of false positive were found and fixed with regression tests, and one
+`SAFE` suggestion proved lossy for CRLF files and was fixed too. A project that
+fails to install is a fact about that project, not about ReproCheck: the four
+failures above all say the same true thing, that a copy without `.git` cannot
+derive a version from tags.
+
+This is a validation on five repositories at one point in time. It is **not** a
+claim of compatibility with every Python project, and it says nothing about
+whether any of these projects reproduces its own results.
+
+## Documentation
+
+| Document | Contents |
+| --- | --- |
+| [docs/reproduction-safety.md](docs/reproduction-safety.md) | what each step executes, network policy, Git policy, the isolation model and its limits |
+| [docs/external-validation.md](docs/external-validation.md) | the five real projects, every finding classified by hand, gaps and metrics |
+| [docs/benchmark-openclimatefix.md](docs/benchmark-openclimatefix.md) | the history of the checks against one repository over successive versions |
+| [CHANGELOG.md](CHANGELOG.md) | what this release contains and what it still cannot do |
+
+The rest of this README is the reference: the layers, every check, the report
+format, the verdict rules, the suggestion engine, the fix path and the
+limitations.
 
 ## How it is organised
 
@@ -991,34 +1130,6 @@ implementation.
 real external repository, including the problems it does **not** detect, and
 `docs/reproduction-safety.md` documents the isolation model and its limits.
 
-## Validated on real-world projects
-
-ReproCheck has been run against five public repositories at a fixed commit, each
-cloned outside this repository and left untouched (`git status --porcelain` was 0
-lines before and after every run). The full evidence, including the
-classification of every warning and the gaps that were found, is in
-`docs/external-validation.md`.
-
-| Project | Commit | Python files | Scan | Suggest | Reproduce |
-| --- | --- | --- | --- | --- | --- |
-| [pint](https://github.com/hgrecco/pint) | `e4042bbe5c66` | 110 | 0.53 s, 0 errors, 12 warnings | 1 safe, 7 review, 2 manual | fails: version comes from Git metadata |
-| [tqdm](https://github.com/tqdm/tqdm) | `9cf5a12b1f95` | 68 | 0.36 s, 0 errors, 11 warnings | 1 safe, 9 review, 2 manual | fails: version comes from Git metadata |
-| [astropy](https://github.com/astropy/astropy) | `592070633f16` | 1006 | 3.80 s, 0 errors, 9 warnings | 1 safe, 0 review, 4 manual | fails: version comes from Git metadata |
-| [mne-python](https://github.com/mne-tools/mne-python) | `47d5be239f12` | 929 | 11.06 s, 0 errors, 38 warnings | 1 safe, 26 review, 3 manual | fails: version comes from Git metadata |
-| [napari](https://github.com/napari/napari) | `4b1f6dd779c6` | 1029 | 2.20 s, 0 errors, 8 warnings | 1 safe, 3 review, 2 manual | installed, `pip check` clean, 2 modules imported |
-
-Five scans, five suggests and eleven reproductions produced **no crash, no
-traceback and no unexpected write**. All 78 warnings were reviewed against the
-cited source; six classes of false positive were found and fixed, each with a
-regression test, and one `SAFE` suggestion proved lossy for CRLF files and was
-fixed too. A project that fails to install is a fact about that project, not
-about ReproCheck: the four failures above all say the same true thing, that a
-copy without `.git` cannot derive a version from tags.
-
-This is a validation on five repositories at one point in time. It is **not** a
-claim of compatibility with every Python project, and it says nothing about
-whether any of these projects reproduces its own results.
-
 ## Current limitations
 
 - Python projects only.
@@ -1123,6 +1234,11 @@ whether any of these projects reproduces its own results.
   the build backends ran with the current user's privileges.
 - Only `pyproject.toml`-based projects were validated. A `setup.py`-only or
   `setup.cfg`-based distribution is a blind spot none of the five exercises.
+- A project whose **test suite contains path fixtures** gets RC120 and RC121
+  findings about the fixtures themselves. ReproCheck reports them because they
+  are true statements about the text of those files, and there is deliberately
+  no exclusion for `tests/`: a test that opens a data file which is not in the
+  repository is a real problem, and hiding the whole directory would hide it.
 - No AI, no auto-fix and no scoring. The recommendations are static sentences
   attached to finding IDs, not advice derived from the project, the suggestions
   come from a fixed rule table, and the writes come from a named suggestion the

@@ -10,3 +10,9 @@ dist/
 # ReproCheck output
 reprocheck-report.json
 reprocheck-report.md
+reprocheck-diff.json
+reprocheck-diff.md
+reprocheck-suggestions.json
+reprocheck-suggestions.md
+reprocheck-fix.json
+reprocheck-fix.md

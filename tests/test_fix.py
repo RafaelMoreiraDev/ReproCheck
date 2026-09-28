@@ -31,7 +31,7 @@ from reprocheck.cli import (
 from reprocheck.fix import apply as fix_apply
 from reprocheck.fix import run_fix, run_rollback, sha256
 from reprocheck.fix.models import ApplicationStatus, RollbackState
-from reprocheck.fix.records import list_records, load_record
+from reprocheck.fix.records import list_records, load_record, record_path
 from reprocheck.output import FIX_MARKDOWN_NAME, FIX_NAME
 from reprocheck.reporters.fix import render_fix_markdown
 
@@ -426,6 +426,20 @@ def test_record_contains_the_audit_fields(make_project, tmp_path, monkeypatch) -
     assert data["dry_run"] is False
     assert record is not None
     assert record.after_sha256 == sha256((root / ".gitignore").read_bytes())
+
+
+def test_record_file_is_named_applied() -> None:
+    record_id = "20260928T120000-FIX-RC140-001"
+    """The audit trail is recognisable in a directory listing.
+
+    Found while validating the release: the record was written next to its own
+    backup under a bare timestamped name, so nothing in the file name said what
+    it was.
+    """
+    assert record_path("C:/p", record_id).name == f"applied-{record_id}.json"
+    assert (
+        record_path("C:/p", f"applied-{record_id}").name == f"applied-{record_id}.json"
+    )
 
 
 def test_records_list_is_per_project(make_project, tmp_path, monkeypatch) -> None:

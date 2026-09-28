@@ -4,30 +4,64 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reprocheck"
-version = "0.6.0"
+# The version lives in exactly one place: src/reprocheck/__init__.py. Declaring
+# it dynamic here means pyproject and the package can never disagree.
+dynamic = ["version"]
 description = "Read-only reproducibility scanner for Python projects"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
-authors = [{ name = "ReproCheck" }]
-keywords = ["reproducibility", "scanner", "static-analysis", "read-only"]
+license = "MIT"
+# PEP 639: the SPDX expression above replaces the ``License ::`` classifier,
+# and setuptools refuses both at once.
+license-files = ["LICENSE"]
+authors = [{ name = "Rafael Antonio Brito Moreira" }]
+maintainers = [{ name = "Rafael Antonio Brito Moreira" }]
+keywords = [
+  "reproducibility",
+  "scanner",
+  "static-analysis",
+  "read-only",
+  "supply-chain",
+  "provenance",
+]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Environment :: Console",
   "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Scientific/Engineering",
+  "Typing :: Typed",
 ]
 dependencies = ["packaging>=23.0"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+# Development and test tooling only. The runtime dependency set stays at one
+# package on purpose: a scanner people are asked to trust should not drag a
+# tree of libraries into their environment.
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6",
+  "build>=1.2",
+  "twine>=5.1",
+]
 
 [project.scripts]
 reprocheck = "reprocheck.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/reprocheck/reprocheck"
+Source = "https://github.com/reprocheck/reprocheck"
+Issues = "https://github.com/reprocheck/reprocheck/issues"
+Changelog = "https://github.com/reprocheck/reprocheck/blob/main/CHANGELOG.md"
+
+[tool.setuptools.dynamic]
+version = { attr = "reprocheck.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

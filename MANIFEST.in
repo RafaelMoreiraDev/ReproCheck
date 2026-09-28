@@ -1,0 +1,17 @@
+# What a source distribution must carry beyond the package itself.
+#
+# setuptools includes the package, the readme and the license files on its own.
+# Everything the README links to has to be named here, or a user who installs
+# from the sdist finds broken links.
+
+include CHANGELOG.md
+include LICENSE
+recursive-include docs *.md
+recursive-include scripts *.py
+
+# Never ship local state, reports or a benchmark clone.
+prune .github
+prune tests/fixtures
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude .DS_Store

@@ -47,7 +47,6 @@ from reprocheck.suggest import Safety, suggest
 TEMP_SUFFIX = ".reprocheck-tmp"
 
 BACKUP_DIRNAME = "applied"
-RECORD_PREFIX = "applied-"
 
 REJECTED = (
     "This suggestion requires human judgment and cannot be applied automatically."

@@ -35,7 +35,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from reprocheck import __version__
+from reprocheck import package_version
 from reprocheck.diff import (
     BaselineError,
     compare_reports,
@@ -102,7 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--version", action="version", version=f"reprocheck {__version__}"
+        "--version", action="version", version=f"reprocheck {package_version()}"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
