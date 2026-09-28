@@ -4,6 +4,25 @@ All notable changes to ReproCheck are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [PEP 440](https://peps.python.org/pep-0440/) versions.
 
+## [0.11.0b2] — 2026-09-28
+
+The first release published to the real PyPI. No functional change from
+`0.11.0b1`; the pipeline is what changed.
+
+### Added
+
+- `SECURITY.md` and `SUPPORT.md`.
+
+### Changed
+
+- **Publishing moved from a manual API token to GitHub OIDC.** Releases are built
+  and uploaded by `.github/workflows/release.yml` using Trusted Publishing, which
+  is what `0.11.0b1` could not use. No long-lived PyPI secret is stored in the
+  repository any more, and the credential a release uses is short-lived and
+  issued per run.
+- The release workflow refuses to publish when the tag and the package version
+  disagree, so a mis-tagged commit cannot upload mismatched artifacts.
+
 ## [0.11.0b1] — 2026-09-28
 
 The first release candidate. Nothing has been published: no PyPI upload, no
@@ -88,4 +107,5 @@ GitHub release, no tag, no remote.
 - Only one kind of fix can be applied (`RC140`), and only one suggestion at a
   time. There is no "apply all" and no interactive prompt.
 
+[0.11.0b2]: https://github.com/RafaelMoreiraDev/ReproCheck/releases
 [0.11.0b1]: https://github.com/RafaelMoreiraDev/ReproCheck/releases

@@ -262,7 +262,135 @@ def test_workflow_matrix_matches_the_declared_support() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 7. the release script itself
+# 7. the release workflow: trusted publishing, no secret
+# --------------------------------------------------------------------------- #
+
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+RELEASE = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+
+def test_release_workflow_exists() -> None:
+    assert RELEASE_WORKFLOW.is_file()
+    assert "name: release" in RELEASE
+
+
+def test_release_workflow_only_runs_for_tags() -> None:
+    """A release is a decision, not a side effect of pushing to main."""
+    on = RELEASE.split("permissions:", 1)[0]
+    assert "tags:" in on
+    assert '- "v*"' in on
+    assert "branches:" not in on
+    assert "workflow_dispatch" not in on
+
+
+def test_release_workflow_checks_the_tag_against_the_package_version() -> None:
+    assert "GITHUB_REF_NAME#v" in RELEASE
+    assert "reprocheck.__version__" in RELEASE
+    assert "does not match the package version" in RELEASE
+    assert "python -m twine check --strict" in RELEASE
+    assert "--audit-only" in RELEASE
+
+
+def test_release_workflow_uses_oidc_and_nothing_else() -> None:
+    publish = RELEASE.split("publish:", 1)[1]
+    assert "id-token: write" in publish
+    assert "environment:" in publish
+    assert "name: pypi" in publish
+    # Minting an OIDC token must not come with repository write access.
+    assert "contents: write" not in RELEASE
+    assert "pull-requests: write" not in RELEASE
+
+
+def test_release_workflow_never_carries_a_pypi_secret() -> None:
+    for secret in (
+        "TWINE_PASSWORD",
+        "TWINE_USERNAME",
+        "PYPI_API_TOKEN",
+        "password:",
+        ".pypirc",
+        "secrets.",
+        "__token__",
+    ):
+        assert secret not in RELEASE, secret
+
+
+def test_publish_action_is_the_official_one_pinned_to_a_sha() -> None:
+    assert "pypa/gh-action-pypi-publish@" in RELEASE
+    line = next(
+        line for line in RELEASE.splitlines() if "gh-action-pypi-publish" in line
+    )
+    _, _, sha = line.split("uses:", 1)[1].split("#")[0].strip().partition("@")
+    assert len(sha) == 40 and all(c in "0123456789abcdef" for c in sha)
+    assert "# v" in line, "the human tag must stay next to the pin"
+    # A mutable branch would be the thing RC220 reports.
+    assert "@release/v1" not in RELEASE
+    assert "@main" not in RELEASE
+
+
+def test_every_action_in_the_release_workflow_is_pinned() -> None:
+    uses = [line for line in RELEASE.splitlines() if "uses:" in line]
+    assert len(uses) >= 4, uses
+    for line in uses:
+        reference = line.split("uses:", 1)[1].split("#")[0].strip()
+        _, _, sha = reference.partition("@")
+        assert len(sha) == 40 and all(c in "0123456789abcdef" for c in sha), reference
+        assert "# v" in line
+
+
+def test_the_two_workflows_pin_the_same_shared_actions() -> None:
+    """Two workflows using different versions of one action is RC221.
+
+    The first version of the release workflow pinned newer actions, and the
+    project's own scan reported it. Both now share one pin, and this test stops
+    them drifting apart again.
+    """
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    shared = ("actions/checkout", "actions/setup-python")
+    for action in shared:
+        in_ci = next(line for line in ci.splitlines() if f"{action}@" in line).split(
+            "@"
+        )[1][:40]
+        in_release = next(
+            line for line in RELEASE.splitlines() if f"{action}@" in line
+        ).split("@")[1][:40]
+        assert in_ci == in_release, f"{action}: ci={in_ci} release={in_release}"
+
+
+def test_project_metadata_and_package_agree_on_the_version() -> None:
+    """The value the release workflow compares the tag against."""
+    assert PYPROJECT["project"]["dynamic"] == ["version"]
+    assert PYPROJECT["tool"]["setuptools"]["dynamic"]["version"] == {
+        "attr": "reprocheck.__version__"
+    }
+    from reprocheck import __version__ as imported
+
+    assert imported == __version__
+    assert __version__ == "0.11.0b2"
+
+
+def test_changelog_records_the_trusted_publishing_release() -> None:
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert f"## [{__version__}]" in changelog
+    assert "Trusted Publishing" in changelog
+    assert "## [0.11.0b1]" in changelog, "the first beta stays in the history"
+
+
+def test_self_scan_finds_no_mutable_reference_in_the_release_workflow() -> None:
+    """The new workflow must not trip the rule the tool reports as RC220."""
+    from reprocheck.scanner import scan
+
+    report = scan(ROOT)
+    hits = [
+        finding
+        for finding in report.findings
+        if finding.id == "RC220"
+        and RELEASE_WORKFLOW.name in str(finding.evidence or "")
+    ]
+    assert hits == [], [f"{item.evidence} {item.message}" for item in hits]
+
+
+# --------------------------------------------------------------------------- #
+# 8. the release script itself
 # --------------------------------------------------------------------------- #
 
 

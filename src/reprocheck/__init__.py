@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from importlib import metadata
 
-__version__ = "0.11.0b1"
+__version__ = "0.11.0b2"
 
 __all__ = ["__version__", "package_version"]
 
