@@ -42,6 +42,8 @@ DIFF_MARKDOWN_NAME = "reprocheck-diff.md"
 BASELINE_NAME = "baseline.json"
 SUGGESTIONS_NAME = "reprocheck-suggestions.json"
 SUGGESTIONS_MARKDOWN_NAME = "reprocheck-suggestions.md"
+FIX_NAME = "reprocheck-fix.json"
+FIX_MARKDOWN_NAME = "reprocheck-fix.md"
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 

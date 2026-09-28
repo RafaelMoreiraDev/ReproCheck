@@ -1,11 +1,11 @@
-# Benchmark — Open Source Quartz Solar Forecast
+﻿# Benchmark — Open Source Quartz Solar Forecast
 
 External benchmark for ReproCheck. The target project is **not** part of this
 repository and is never modified: ReproCheck only reads it.
 
 - Target: `C:\Projetos\OpenClimateFix\open-source-quartz-solar-forecast`
 - Commit scanned: `c07ad7402598979a7cd3c2eab7430098a3d56e78` (branch `main`, clean)
-- ReproCheck version: `0.9.0` (TASK-009 suggest run; detection unchanged since V0.6)
+- ReproCheck version: `0.10.0` (TASK-010 fix run; detection unchanged since V0.6)
 - Date: 2026-09-28
 
 The `OCF-Bxx` list below is an **external benchmark only**. It was reconstructed by
@@ -393,6 +393,57 @@ little.
 **The project was not modified.** `git status --porcelain` returned 0 lines and
 `HEAD` remained `c07ad7402598979a7cd3c2eab7430098a3d56e78` before and after the
 run, and the `.gitignore` on disk still ends at line 13.
+
+## Applying a fix (V0.10)
+
+First, a **dry run on the original repository** — no `--apply`, so nothing was
+written and the target is untouched:
+
+```
+Suggestion:   FIX-RC140-001
+File:         .gitignore
+Safety:       SAFE
+Precondition: PASS
+              before 8e9a2bb1ea96c34b2fb7adc1f5b8833c2894055d8009d3c4d0c5ee09c69b3c73
+              after  fbfbdee62704fbbd1a68092204307b442d0cf6bd70ca480580b828707a9c7e3e
+Status:       DRY_RUN
+Applied:      NO
+```
+
+`git status --porcelain` returned 0 lines and `.gitignore` still had 13 lines
+after the dry run.
+
+The real application was then exercised on a **throwaway copy** of the
+repository, because applying a change to somebody else's working tree is not a
+benchmark, it is an edit:
+
+| Step | Result |
+| --- | --- |
+| before | RC140 reported; `.gitignore` 288 bytes, `8e9a2bb1ea96` |
+| `--apply` | `APPLIED`, file 288 → 355 bytes, `8e9a2bb1ea96` → `fbfbdee62704` |
+| validation | the file matches `fbfbdee62…` and **RC140 is no longer reported** |
+| record | `…/ocf-copy-bb6d6c7d/applied/20260928T013339-FIX-RC140-001.json` |
+| backup | `…/ocf-copy-bb6d6c7d/applied/20260928T013339-FIX-RC140-001/before.bin` |
+| leftovers in the project | none: no `.bak`, no temporary file |
+| second `--apply` | `NOT_APPLICABLE` — the identifier no longer exists |
+| `--rollback` | `ROLLED_BACK`, 288 bytes, hash identical to the original, RC140 back |
+| second `--rollback` | `STALE` — the file no longer matches the recorded hash, so nothing was overwritten |
+
+The copy's `.gitignore` after the application was exactly the dry-run diff:
+`.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`, `.venv/`, `build/`, `dist/`
+appended after `.cache.sqlite` and `*.egg-info`, with the three existing lines
+untouched.
+
+**The original repository was never modified**: `git status --porcelain` was 0
+lines before and after everything above, and `HEAD` stayed at
+`c07ad7402598979a7cd3c2eab7430098a3d56e78`.
+
+The generated patch was also validated with `git apply --check` on temporary
+repositories, for LF, CRLF and no-final-newline files. That check caught a real
+defect of the TASK-009 diff: the hunk header kept a line count that the
+`\ No newline at end of file` transform had made wrong, which made the patch
+*corrupt* for `git apply`. The counts are now recomputed from the body, so the
+diff is a real patch and not only a readable one.
 
 ## Read-only verification
 

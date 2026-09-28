@@ -6,6 +6,7 @@ byte the same before and after. Patches are built in memory and never applied.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -123,6 +124,15 @@ def test_rc140_produces_a_safe_suggestion(make_project) -> None:
     assert suggestion.unified_diff is not None
     assert suggestion.can_auto_apply_later is True
     assert suggestion.requires_user_approval is True
+    # The precondition is a hash of the exact bytes, not of the parsed text.
+    assert (
+        suggestion.before_sha256
+        == hashlib.sha256((root / ".gitignore").read_bytes()).hexdigest()
+    )
+    assert (
+        suggestion.after_sha256
+        == hashlib.sha256(suggestion.after.encode("utf-8")).hexdigest()
+    )
     assert snapshot(root) == before
 
 
@@ -490,6 +500,8 @@ def test_suggestions_json_shape(make_project, tmp_path) -> None:
             "rationale",
             "before",
             "after",
+            "before_sha256",
+            "after_sha256",
             "unified_diff",
             "requires_user_approval",
             "can_auto_apply_later",
@@ -625,17 +637,14 @@ def test_cli_suggest_missing_path(tmp_path, capsys) -> None:
     assert "does not exist" in capsys.readouterr().err
 
 
-def test_cli_has_no_apply_option(capsys) -> None:
-    """V0.9 proposes only: there is no --apply and no ``reprocheck fix``."""
+def test_suggest_has_no_apply_option(capsys) -> None:
+    """V0.9 proposes only: ``suggest`` never writes, ``fix`` is a separate command."""
     with pytest.raises(SystemExit):
         main(["suggest", "--help"])
     output = capsys.readouterr().out
 
     assert "--apply" not in output
     assert "--force" not in output
-    with pytest.raises(SystemExit):
-        main(["fix", "somewhere"])
-    assert "invalid choice" in capsys.readouterr().err
 
 
 def test_project_without_fixable_findings(make_project, tmp_path) -> None:

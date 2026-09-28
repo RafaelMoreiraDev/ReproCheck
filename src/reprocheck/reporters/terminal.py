@@ -9,6 +9,7 @@ from reprocheck.models import Finding, ScanReport, Severity
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     from reprocheck.diff.models import ReproducibilityDiff
+    from reprocheck.fix.models import FixApplicationResult
     from reprocheck.suggest.models import SuggestionReport
 
 _SEVERITY_LABEL = {
@@ -410,6 +411,66 @@ def format_suggestions(
         lines.append("")
     lines.append("No files were modified.")
     lines.append("")
+    lines.append("Report:")
+    lines.append(f"  {json_path}")
+    lines.append(f"  {markdown_path}")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# Fix
+# --------------------------------------------------------------------------- #
+
+
+def format_fix(result: FixApplicationResult, json_path: str, markdown_path: str) -> str:
+    """Render one fix invocation for the terminal.
+
+    The wording never claims the project is fixed: one suggestion was either
+    shown or written, and every other finding is untouched.
+    """
+    lines = ["ReproCheck fix", ""]
+    lines.append("Suggestion:")
+    lines.append(f"  {result.suggestion_id or result.requested or '-'}")
+    lines.append("")
+    lines.append("File:")
+    lines.append(f"  {result.file or '-'}")
+    lines.append("")
+    lines.append("Safety:")
+    lines.append(f"  {result.safety or '-'}")
+    lines.append("")
+    if result.before_sha256:
+        state = "PASS" if result.precondition_passed else "FAIL"
+        lines.append("Precondition:")
+        lines.append(f"  {state}")
+        lines.append(f"  before: {result.before_sha256}")
+        lines.append(f"  after:  {result.after_sha256 or '-'}")
+        lines.append("")
+    lines.append("Status:")
+    lines.append(f"  {result.status.value}")
+    lines.append(f"  Applied: {'YES' if result.applied else 'NO'}")
+    if result.validation.performed:
+        lines.append("")
+        lines.append("Validation:")
+        lines.append(f"  {'PASS' if result.validation.finding_resolved else 'FAILED'}")
+        if result.validation.detail:
+            lines.append(f"  {result.validation.detail}")
+    if result.rollback.value != "NOT_NEEDED":
+        lines.append("")
+        lines.append("Rollback:")
+        lines.append(f"  {result.rollback.value}")
+    if result.record_path:
+        lines.append("")
+        lines.append("Record:")
+        lines.append(f"  {result.record_path}")
+    if result.reason:
+        lines.append("")
+        lines.append(f"Reason: {result.reason}")
+    lines.extend(result.messages)
+    lines.append("")
+    if result.unified_diff:
+        lines.append("Diff:")
+        lines.extend(result.unified_diff.splitlines())
+        lines.append("")
     lines.append("Report:")
     lines.append(f"  {json_path}")
     lines.append(f"  {markdown_path}")

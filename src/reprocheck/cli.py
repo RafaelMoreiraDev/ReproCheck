@@ -44,11 +44,15 @@ from reprocheck.diff import (
     load_report,
     save_baseline,
 )
+from reprocheck.fix import run_fix, run_rollback
+from reprocheck.fix.models import ApplicationStatus, FixApplicationResult
 from reprocheck.models import ScanReport, VerdictStatus
 from reprocheck.output import (
     BASELINE_NAME,
     DIFF_MARKDOWN_NAME,
     DIFF_NAME,
+    FIX_MARKDOWN_NAME,
+    FIX_NAME,
     REPORT_MARKDOWN_NAME,
     REPORT_NAME,
     SUGGESTIONS_MARKDOWN_NAME,
@@ -57,11 +61,12 @@ from reprocheck.output import (
 )
 from reprocheck.reporters import format_report, write_markdown, write_report
 from reprocheck.reporters.diff import write_diff_json, write_diff_markdown
+from reprocheck.reporters.fix import write_fix_json, write_fix_markdown
 from reprocheck.reporters.suggestions import (
     write_suggestions_json,
     write_suggestions_markdown,
 )
-from reprocheck.reporters.terminal import format_diff, format_suggestions
+from reprocheck.reporters.terminal import format_diff, format_fix, format_suggestions
 from reprocheck.reproduction.runner import ReproductionError, reproduce
 from reprocheck.scanner import (
     ScanError,
@@ -76,6 +81,9 @@ EXIT_OK = 0
 EXIT_PARTIAL = 1
 EXIT_FAIL = 2
 EXIT_OPERATIONAL = 3
+EXIT_STALE = 5
+EXIT_ROLLED_BACK = 6
+EXIT_ROLLBACK_FAILED = 7
 
 #: Kept for callers that used the old name; it now means an operational error.
 EXIT_ERROR = EXIT_OPERATIONAL
@@ -148,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_baseline_parsers(subparsers)
     _add_suggest_parser(subparsers)
+    _add_fix_parser(subparsers)
     return parser
 
 
@@ -264,6 +273,50 @@ def _add_suggest_parser(subparsers) -> None:
     )
 
 
+def _add_fix_parser(subparsers) -> None:
+    fix = subparsers.add_parser(
+        "fix",
+        help=("apply exactly one SAFE suggestion; a dry run unless --apply is given"),
+    )
+    fix.add_argument("path", metavar="<path>", help="path of the project to fix")
+    target = fix.add_mutually_exclusive_group(required=True)
+    target.add_argument(
+        "--suggestion",
+        metavar="<ID>",
+        default=None,
+        help="identifier of the suggestion to show or apply, e.g. FIX-RC140-001",
+    )
+    target.add_argument(
+        "--rollback",
+        metavar="<record-id>",
+        default=None,
+        help="identifier of an application record whose change is to be undone",
+    )
+    fix.add_argument(
+        "--apply",
+        action="store_true",
+        help="actually write the change; without it nothing is modified",
+    )
+    fix.add_argument(
+        "--json",
+        metavar="<arquivo>",
+        default=None,
+        help=f"fix report destination (default: the state directory, {FIX_NAME})",
+    )
+    fix.add_argument(
+        "--markdown",
+        metavar="<arquivo>",
+        default=None,
+        help=f"Markdown fix destination (default: {FIX_MARKDOWN_NAME})",
+    )
+    fix.add_argument(
+        "--output-dir",
+        metavar="<diretorio>",
+        default=None,
+        help="directory for both files when --json/--markdown are not given",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Commands
 # --------------------------------------------------------------------------- #
@@ -282,6 +335,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_baseline_compare(args)
     if args.command == "suggest":
         return _run_suggest(args)
+    if args.command == "fix":
+        return _run_fix(args)
     if args.command != "scan":  # pragma: no cover - argparse enforces this
         parser.print_help()
         return EXIT_USAGE
@@ -432,6 +487,55 @@ def _run_suggest(args: argparse.Namespace) -> int:
 
     print(format_suggestions(proposals, str(json_path), str(markdown_path)))
     return EXIT_OK
+
+
+def _run_fix(args: argparse.Namespace) -> int:
+    """Show or apply one suggestion, or undo one recorded application."""
+    try:
+        if args.rollback:
+            result = run_rollback(args.path, args.rollback)
+        else:
+            result = run_fix(args.path, args.suggestion, apply=args.apply)
+    except ScanError as exc:
+        print(f"reprocheck: error: {exc}", file=sys.stderr)
+        return EXIT_OPERATIONAL
+    except OSError as exc:
+        print(f"reprocheck: error: {exc}", file=sys.stderr)
+        return EXIT_OPERATIONAL
+
+    project = str(result.project.get("path") or args.path)
+    try:
+        json_path = write_fix_json(
+            result, resolve_destination(args.json, FIX_NAME, args.output_dir, project)
+        )
+        markdown_path = write_fix_markdown(
+            result,
+            resolve_destination(
+                args.markdown, FIX_MARKDOWN_NAME, args.output_dir, project
+            ),
+        )
+    except OSError as exc:
+        print(
+            f"reprocheck: error: could not write the fix report: {exc}", file=sys.stderr
+        )
+        return EXIT_OPERATIONAL
+
+    print(format_fix(result, str(json_path), str(markdown_path)))
+    return _fix_exit_code(result)
+
+
+def _fix_exit_code(result: FixApplicationResult) -> int:
+    if result.status in {
+        ApplicationStatus.APPLIED,
+        ApplicationStatus.DRY_RUN,
+        ApplicationStatus.ROLLED_BACK,
+    }:
+        return EXIT_OK
+    if result.status in {ApplicationStatus.STALE, ApplicationStatus.NOT_APPLICABLE}:
+        return EXIT_STALE
+    if result.status is ApplicationStatus.ROLLBACK_FAILED:
+        return EXIT_ROLLBACK_FAILED
+    return EXIT_ROLLED_BACK
 
 
 # --------------------------------------------------------------------------- #

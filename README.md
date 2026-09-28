@@ -17,7 +17,7 @@ a person can read without knowing any check ID.
 
 ## How it is organised
 
-ReproCheck separates five layers, and never mixes them:
+ReproCheck separates six layers, and never mixes them:
 
 | Layer | Question | Module |
 | --- | --- | --- |
@@ -26,12 +26,13 @@ ReproCheck separates five layers, and never mixes them:
 | **FINDING** | What can be stated, with which evidence and confidence? | `reprocheck.models.Finding` |
 | **VERDICT** | What do all of those facts add up to, and what is still unknown? | `reprocheck.models.verdict`, `reprocheck.checks.verdict` |
 | **SUGGESTION** | Is there a deterministic, safe change that would remove this finding? | `reprocheck.suggest` |
+| **APPLICATION** | Can that one change be written, verified and undone? | `reprocheck.fix` |
 
 A check is a pure function of the facts. It cannot read the filesystem, run code
 or guess: if a conclusion cannot be proven, no finding is emitted. The verdict is
 a pure derivation of the findings: it adds no new claim, and it never produces a
 numeric score. A suggestion is a pure derivation of a finding and the facts it
-came from: it is never applied.
+came from. Only `fix` writes, and only with `--apply`.
 
 
 ## `scan` is strictly read-only
@@ -47,17 +48,18 @@ ReproCheck **never**:
 - changes Git state (no `checkout`, `reset`, `clean`, `commit`, no hooks).
 
 The only writes `scan` performs are the two reports, at the exact paths you
-choose (by default `./reprocheck-report.json` and `./reprocheck-report.md`, in
-your current directory). Nothing is written inside the analysed project.
-
+choose (or in the per-user state directory, below). Nothing is written inside
+the analysed project.
 
 Git is inspected with read-only commands only (`rev-parse`, `status
 --porcelain`), executed with `--no-optional-locks` so that even the Git index is
 left untouched.
 
-`reproduce` is the single exception: it executes the project's build backend on
-a **copy**, in a workspace outside the project, and the original is verified
-before and after. See "Reproduce" below and `docs/reproduction-safety.md`.
+`reproduce` executes the project's build backend on a **copy**, in a workspace
+outside the project, and the original is verified before and after. `fix` is the
+only command that writes to the project, one named suggestion at a time, only
+with `--apply`, and only for a `SAFE` suggestion with a precondition hash. See
+"Reproduce", "Fix" below and `docs/reproduction-safety.md`.
 
 ## Install for development
 
@@ -75,6 +77,7 @@ python -m pip install -e ".[dev]"
 reprocheck scan C:\Projetos\some-project
 reprocheck reproduce C:\Projetos\some-project --network --runtime-checks
 reprocheck suggest C:\Projetos\some-project
+reprocheck fix C:\Projetos\some-project --suggestion FIX-RC140-001
 reprocheck baseline save reprocheck-report.json --output baseline.json
 reprocheck baseline compare baseline.json reprocheck-report.json
 ```
@@ -85,6 +88,7 @@ or, without installing the console script:
 python -m reprocheck scan C:\Projetos\some-project
 python -m reprocheck reproduce C:\Projetos\some-project
 python -m reprocheck suggest C:\Projetos\some-project
+python -m reprocheck fix C:\Projetos\some-project --suggestion FIX-RC140-001
 python -m reprocheck baseline compare baseline.json reprocheck-report.json
 ```
 
@@ -99,7 +103,9 @@ python -m reprocheck baseline compare baseline.json reprocheck-report.json
 
 `reproduce` takes the same three destination options, plus `--network`,
 `--keep-workspace`, `--runtime-checks` and `--verbose`. `suggest` takes the three
-destination options and nothing else — there is no `--apply`.
+destination options and nothing else — it has no `--apply`. `fix` takes the three
+destination options, `--suggestion <ID>` or `--rollback <record-id>` (one of the
+two is required) and `--apply`.
 
 ### Where files are written
 
@@ -131,17 +137,20 @@ working unchanged. The path of both files is always printed.
 
 ### Exit codes
 
-| Code | `scan` | `reproduce` | `suggest` | `baseline save` / `compare` |
-| --- | --- | --- | --- | --- |
-| `0` | report written | verdict is `PASS` | proposals written | done (a comparison returns `0` whether or not anything changed) |
-| `1` | — | verdict is `PARTIAL` | — | — |
-| `2` | — | verdict is `FAIL` | — | — |
-| `3` | path unusable, or a report could not be written | same | same | baseline missing, invalid, unknown schema, refusing to overwrite, or a different project |
+| Code | `scan` | `reproduce` | `suggest` | `fix` | `baseline save` / `compare` |
+| --- | --- | --- | --- | --- | --- |
+| `0` | report written | verdict is `PASS` | proposals written | dry run shown, change applied and validated, or rollback succeeded | done (a comparison returns `0` whether or not anything changed) |
+| `1` | — | verdict is `PARTIAL` | — | — | — |
+| `2` | — | verdict is `FAIL` | — | — | — |
+| `3` | path unusable, or a report could not be written | same | same | same | baseline missing, invalid, unknown schema, refusing to overwrite, or a different project |
+| `5` | — | — | — | stale or not applicable; nothing was written | — |
+| `6` | — | — | — | the write failed, the rollback restored the previous bytes | — |
+| `7` | — | — | — | the rollback itself failed | — |
 
 `2` is also what argparse uses for a malformed command line, which is why
 operational errors use `3`. A change is a fact, not an error: `compare` never
-signals "something changed" through the exit code, and `suggest` never signals
-"there is something to fix" through it either.
+signals "something changed" through the exit code, and neither `suggest` nor
+`fix` signals "there was something to fix" through it.
 
 
 ### Example
@@ -387,7 +396,7 @@ No material reproducibility changes detected.
 
 ```json
 {
-  "reprocheck_version": "0.9.0",
+  "reprocheck_version": "0.10.0",
   "report_schema_version": "6",
 
   "scan_timestamp": "2026-01-01T12:00:00+00:00",
@@ -517,7 +526,7 @@ Abridged example:
 - Project: quartz-solar-forecast
 - Path: C:\Projetos\OpenClimateFix\open-source-quartz-solar-forecast
 - Scan time: 2026-09-27T16:31:04+00:00
-- ReproCheck version: 0.9.0
+- ReproCheck version: 0.10.0
 - Reproduction verdict: **PARTIAL**
 - Why:
   - 3 open warning(s): RC150, RC203, RC220
@@ -646,6 +655,112 @@ the counts and one entry per suggestion (`suggestion_id`, `finding_id`, `kind`,
 `limitations`), plus a `no_proposal` list so that a problem without a rule is
 visible instead of silently absent. Findings with no rule and `info` severity
 are counted as informational, because they are observations, not problems.
+
+## Fix: applying one SAFE suggestion (V0.10)
+
+`reprocheck fix` is the only command in ReproCheck that writes to the analysed
+project. Everything else is read-only. There is no "apply all", no prompt, and
+no way to apply a suggestion that is not `SAFE` and carries a patch.
+
+```text
+reprocheck suggest  <project>                          # what could be fixed
+reprocheck fix      <project> --suggestion FIX-RC140-001          # dry run
+reprocheck fix      <project> --suggestion FIX-RC140-001 --apply  # write it
+reprocheck fix      <project> --rollback 20260928T013339-FIX-RC140-001
+```
+
+A dry run is the default. It re-scans, regenerates the suggestions, and prints
+the precondition hashes, the diff and `No files were modified.` Only `--apply`
+writes anything.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | dry run shown, or the change was applied and validated, or a rollback succeeded |
+| `3` | operational error: the path is unusable, or a report could not be written |
+| `5` | `STALE` or `NOT_APPLICABLE`: nothing was written |
+| `6` | the write failed but the rollback restored the previous bytes |
+| `7` | the rollback itself failed — a severe ReproCheck error, reported loudly |
+
+`1` and `2` are not used: they are the `reproduce` verdicts.
+
+### Gates before anything is written
+
+1. the suggestions are **regenerated** from the project as it is now; a
+   suggestion id from an older report is never trusted;
+2. the requested id must exist;
+3. `safety` must be `SAFE` — `REVIEW_REQUIRED` and `MANUAL_ONLY` are refused with
+   *"This suggestion requires human judgment and cannot be applied
+   automatically."*;
+4. the suggestion must carry a diff and be marked `can_auto_apply_later`;
+5. the file must exist;
+6. the SHA-256 of the target's **exact bytes** must equal `before_sha256`, the
+   precondition the rule computed when it built the proposal. A different hash
+   means somebody wrote to the file in between: ReproCheck does not merge and
+   does not overwrite, and the status is `STALE`.
+
+### How the write happens
+
+The bytes written are exactly the bytes the rule proposed — no formatter
+rebuilds the file. The write goes to a temporary file **in the target's own
+directory**, is flushed, `fsync`ed when the platform allows it, and then put in
+place with `os.replace`, which is atomic. The original file mode is preserved.
+The temporary file is removed if anything fails, and nothing is ever left next
+to the project: no `.bak`, no temp file.
+
+Before the write, the current bytes are copied to a backup **inside ReproCheck's
+state directory**, never beside the project:
+
+```text
+<state>/reprocheck/<project>/applied/<record-id>/before.bin
+<state>/reprocheck/<project>/applied/<record-id>.json
+```
+
+The record is the audit trail: project identity, suggestion and finding ids,
+safety, file, timestamps, both hashes, the backup path, the outcome and the
+rollback state. No secret is ever stored.
+
+### What counts as success
+
+After the write, two checks run, and a failure in either one is a rollback:
+
+1. the file is read again and its SHA-256 must equal `after_sha256`;
+2. the project is **re-scanned statically** and the finding must be gone.
+
+Only then is the status `APPLIED`, with the message *"The project now contains
+one intentional change."* — not "the project is fixed": every other finding is
+untouched, and the tool says nothing about them. `reproduce` is never run after
+a fix: that would install and execute project code, and it belongs to an
+explicit, separate command.
+
+If the write, the hash check or the re-scan fails, the backup is restored and
+the restoration is verified. The status is then `ROLLED_BACK` (exit `6`) or, if
+the restoration itself cannot be completed, `ROLLBACK_FAILED` (exit `7`) — which
+is never hidden.
+
+### Git
+
+Git is not required. When the project is a repository, the HEAD and
+`git status --porcelain` are recorded before and after with **read-only**
+commands. ReproCheck never commits, branches, checks out, resets or cleans. If
+any path other than the target changed during the operation, the report says so
+as an anomaly; ReproCheck does not touch those files.
+
+A target that already has uncommitted changes is not a reason to stop: the
+proposal is built on the current bytes, so the precondition still matches, and
+the run is annotated with *"Target file already has uncommitted changes."*
+
+### Rolling back
+
+```powershell
+reprocheck fix <project> --rollback <record-id>
+```
+
+The rollback restores the bytes of `before.bin` **only if the file still matches
+`after_sha256`**. If it does not, the status is `STALE` and nothing is written:
+ReproCheck does not overwrite work done after the fix, and the backup stays
+available. Applying a suggestion twice is impossible — after the first
+application the same id no longer exists, so the second attempt is
+`NOT_APPLICABLE`.
 
 ## Findings
 
@@ -954,21 +1069,36 @@ real external repository, including the problems it does **not** detect, and
   in a logical section, add a comment, or normalise patterns it did not add.
 - `suggest` re-scans the project instead of reading a saved report, so
   `reprocheck suggest --report` does not exist in V0.9.
+- `fix` writes to a project, so its guarantees are narrow on purpose: one named
+  `SAFE` suggestion, one file, one write. There is no "apply all", no
+  interactive prompt and no partial application.
+- The precondition hash is checked over a window of milliseconds, because the
+  suggestion is regenerated in the same run. `STALE` therefore only appears in a
+  race with another writer — which is exactly the case it is there for, and also
+  the reason it is hard to observe.
+- The post-write validation is a static re-scan. It proves the finding is gone,
+  not that the project behaves: nothing is installed, no test runs and no
+  reproduction runs after a fix.
+- The rollback restores bytes, not intent. It refuses to act when the file
+  changed after the fix, which means a manual review is needed in that case.
+- A `ROLLBACK_FAILED` leaves the file in an unknown state on purpose: the report
+  and the backup path are the only way out, and hiding it would be worse.
 - No AI, no auto-fix and no scoring. The recommendations are static sentences
-  attached to finding IDs, not advice derived from the project, and the
-  suggestions come from a fixed rule table. The network is only used by an
-  explicit `--network` during installation.
+  attached to finding IDs, not advice derived from the project, the suggestions
+  come from a fixed rule table, and the writes come from a named suggestion the
+  user typed. The network is only used by an explicit `--network` during
+  installation.
 
 ## Roadmap
 
-- `0.10` - `setup.cfg`, `Pipfile` and Conda dependency sources, PEP 735
+- `0.11` - `setup.cfg`, `Pipfile` and Conda dependency sources, PEP 735
   `include-group` resolution, and non-Python ecosystems (Node).
 - later - an explicit opt-in mode that preserves Git metadata in the
   reproduction copy, so a tag-derived version can be reproduced, plus entry
   point based import discovery.
 - later - comparing more than two points in time, so a drift becomes a trend
   instead of a pair.
-- later - applying a `SAFE` suggestion, always as an explicit, reviewable
-  action with the project fingerprinted before and after.
+- later - `fix --verify`, which would run a reproduction after an application
+  instead of a static re-scan, always opt-in and never by default.
 
 

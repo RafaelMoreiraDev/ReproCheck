@@ -57,7 +57,7 @@ def unified(
             n=context,
         )
     )
-    return "\n".join(_restore_markers(lines))
+    return "\n".join(_fix_counts(_restore_markers(lines)))
 
 
 def _with_sentinel(content: str) -> list[str]:
@@ -80,6 +80,38 @@ def _restore_markers(lines: list[str]) -> list[str]:
         result.append(f"-{text}")
         result.append(NO_NEWLINE_MARKER)
         result.append(f"+{text}")
+    return result
+
+
+def _fix_counts(lines: list[str]) -> list[str]:
+    """Recompute the line counts of every hunk from its body.
+
+    Turning a sentinel into a ``-``/``+`` pair changes the real line counts, and
+    a header that disagrees with its body is a corrupt patch for ``git apply``.
+    """
+    result: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line.startswith("@@"):
+            result.append(line)
+            index += 1
+            continue
+        end = index + 1
+        before = after = 0
+        while end < len(lines) and not lines[end].startswith("@@"):
+            marker = lines[end][:1]
+            if marker in {" ", "-"}:
+                before += 1
+            if marker in {" ", "+"}:
+                after += 1
+            end += 1
+        parts = line.split(" ")
+        before_start = parts[1].split(",")[0]
+        after_start = parts[2].split(",")[0]
+        result.append(f"@@ {before_start},{before} {after_start},{after} @@")
+        result.extend(lines[index + 1 : end])
+        index = end
     return result
 
 

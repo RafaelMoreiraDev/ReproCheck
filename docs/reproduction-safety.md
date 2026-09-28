@@ -189,6 +189,48 @@ content gets **no** patch: the suggestion is downgraded to `REVIEW_REQUIRED`
 with the reason stated, because a `before` that does not match the file on disk
 produces a diff nobody can review.
 
+## What `fix` does and does not do
+
+`reprocheck fix` is the only command that writes to the analysed project, and
+every part of that is deliberate:
+
+- **One suggestion, named by the user.** The identifier is required. There is no
+  "apply all", no prompt, and no way to name a `REVIEW_REQUIRED` or `MANUAL_ONLY`
+  suggestion: those are refused before anything is read for writing.
+- **A dry run is the default.** Without `--apply`, the command prints the
+  precondition hashes, the diff and the fact that nothing was written.
+- **The suggestion is regenerated first.** A `reprocheck-suggestions.json` file
+  is never trusted; the checks run again and the proposal is built from the
+  project as it is at that moment.
+- **The write is atomic.** The new bytes go to a temporary file in the target's
+  own directory, are flushed, `fsync`ed when supported, and replace the original
+  with `os.replace`. The original file mode is preserved, and the temporary file
+  is removed if anything fails — so a crash cannot leave a half-written
+  `.gitignore` behind, and no `.bak` or temp file ever appears in the project.
+- **The bytes are the proposed bytes.** No formatter is involved and no file is
+  reconstructed; the content written is exactly what the rule produced, with the
+  encoding, the line endings, the existing lines and the presence or absence of
+  a final newline preserved.
+- **A precondition hash guards the window.** The SHA-256 of the target's exact
+  bytes is compared with the one the rule recorded. A mismatch means another
+  writer acted in between: ReproCheck does not merge and does not overwrite.
+- **The backup lives outside the project**, in ReproCheck's state directory, and
+  the operation is recorded in an auditable JSON file there.
+- **The result is verified.** The file is read back and hashed, and the project
+  is re-scanned statically; the target finding must be gone. Any failure restores
+  the backup and verifies the restoration. `reproduce` is never run: that would
+  install and execute project code, and it is a separate, explicit command.
+- **Git is only observed.** HEAD and `git status --porcelain` are read before and
+  after. No commit, no branch, no `checkout`, no `reset`, no `clean`. If any path
+  other than the target changed during the operation, the report says so and
+  ReproCheck leaves those files alone.
+- **The rollback refuses to overwrite later work.** `fix --rollback` restores the
+  backup only while the file still matches the hash the application recorded.
+
+The residual risk is stated plainly: after `APPLIED`, the change is one
+intentional edit to one file. Every other finding, and every other file, is
+exactly as it was, and ReproCheck says nothing more than that.
+
 ## What a baseline comparison does and does not do
 
 `reprocheck baseline` is the only command family that reads two files instead of

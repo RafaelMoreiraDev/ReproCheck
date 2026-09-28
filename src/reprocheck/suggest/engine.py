@@ -21,8 +21,9 @@ or created.
 from __future__ import annotations
 
 import codecs
+import hashlib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from reprocheck import __version__
@@ -188,20 +189,8 @@ def suggest(facts: Facts, report: ScanReport) -> SuggestionReport:
 
 
 def _with_id(suggestion: FixSuggestion, suggestion_id: str) -> FixSuggestion:
-    return FixSuggestion(
-        suggestion_id=suggestion_id,
-        finding_id=suggestion.finding_id,
-        title=suggestion.title,
-        safety=suggestion.safety,
-        description=suggestion.description,
-        rationale=suggestion.rationale,
-        file=suggestion.file,
-        confidence=suggestion.confidence,
-        before=suggestion.before,
-        after=suggestion.after,
-        unified_diff=suggestion.unified_diff,
-        limitations=suggestion.limitations,
-    )
+    """Stamp the deterministic identifier on a rule's proposal."""
+    return replace(suggestion, suggestion_id=suggestion_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -255,6 +244,10 @@ def gitignore_patterns(
     newline = patches.detect_newline(content)
     final_newline = patches.has_final_newline(content)
     after = patches.append_lines(content, list(missing), newline=newline)
+    # The file is plain UTF-8 without a BOM here (checked above), so the text
+    # encodes back to exactly the bytes that are on disk.
+    before_bytes = content.encode("utf-8")
+    after_bytes = after.encode("utf-8")
     limitations = [
         "Patterns are appended at the end of the file; no existing line is moved, "
         "reordered or removed.",
@@ -285,6 +278,8 @@ def gitignore_patterns(
         ),
         before=content,
         after=after,
+        before_sha256=hashlib.sha256(before_bytes).hexdigest(),
+        after_sha256=hashlib.sha256(after_bytes).hexdigest(),
         unified_diff=patches.unified(content, after, GITIGNORE),
         limitations=tuple(limitations),
     )

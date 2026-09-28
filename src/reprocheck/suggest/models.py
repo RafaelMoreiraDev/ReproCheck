@@ -60,7 +60,13 @@ KIND_BY_SAFETY = {
 
 @dataclass(frozen=True, slots=True)
 class FixSuggestion:
-    """One deterministic proposal attached to one finding."""
+    """One deterministic proposal attached to one finding.
+
+    ``before_sha256`` and ``after_sha256`` are the preconditions an application
+    would need: the exact bytes of the target file before the proposal, and the
+    exact bytes of ``after``. They are hashes of **bytes**, not of the parsed
+    text, so an encoding or newline difference is part of the contract.
+    """
 
     finding_id: str
     title: str
@@ -71,6 +77,8 @@ class FixSuggestion:
     confidence: str = "medium"
     before: str | None = None
     after: str | None = None
+    before_sha256: str | None = None
+    after_sha256: str | None = None
     unified_diff: str | None = None
     limitations: tuple[str, ...] = ()
     suggestion_id: str = ""
@@ -91,7 +99,13 @@ class FixSuggestion:
     @property
     def can_auto_apply_later(self) -> bool:
         """Only an unambiguous, reversible, local edit could ever be applied."""
-        return self.safety is Safety.SAFE and self.unified_diff is not None
+        return (
+            self.safety is Safety.SAFE
+            and self.unified_diff is not None
+            and self.after is not None
+            and self.before_sha256 is not None
+            and self.after_sha256 is not None
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -106,6 +120,8 @@ class FixSuggestion:
             "rationale": self.rationale,
             "before": self.before,
             "after": self.after,
+            "before_sha256": self.before_sha256,
+            "after_sha256": self.after_sha256,
             "unified_diff": self.unified_diff,
             "requires_user_approval": self.requires_user_approval,
             "can_auto_apply_later": self.can_auto_apply_later,
