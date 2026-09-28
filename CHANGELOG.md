@@ -88,4 +88,4 @@ GitHub release, no tag, no remote.
 - Only one kind of fix can be applied (`RC140`), and only one suggestion at a
   time. There is no "apply all" and no interactive prompt.
 
-[0.11.0b1]: https://github.com/reprocheck/reprocheck/releases/tag/v0.11.0b1
+[0.11.0b1]: https://github.com/RafaelMoreiraDev/ReproCheck/releases

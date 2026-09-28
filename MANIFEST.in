@@ -6,8 +6,16 @@
 
 include CHANGELOG.md
 include LICENSE
+include SUPPORT.md
+include SECURITY.md
 recursive-include docs *.md
 recursive-include scripts *.py
+
+# The tests travel with the sdist on purpose: it is a source distribution, and
+# someone who has to debug a rule needs them. Naming them explicitly also keeps
+# the sdist content stable, instead of depending on what an earlier build
+# happened to leave behind in src/reprocheck.egg-info/SOURCES.txt.
+recursive-include tests *.py
 
 # Never ship local state, reports or a benchmark clone.
 prune .github

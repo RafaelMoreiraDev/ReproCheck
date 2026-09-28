@@ -140,10 +140,58 @@ def test_author_is_declared() -> None:
     assert all(item["name"] == "Rafael Antonio Brito Moreira" for item in people)
 
 
+REPOSITORY = "https://github.com/RafaelMoreiraDev/ReproCheck"
+
+
 def test_project_urls_are_declared() -> None:
     urls = PYPROJECT["project"]["urls"]
     assert set(urls) == {"Homepage", "Source", "Issues", "Changelog"}
     assert all(value.startswith("https://") for value in urls.values())
+
+
+def test_project_urls_point_at_the_one_real_repository() -> None:
+    """Every URL must be the repository the project actually lives in.
+
+    The metadata used to name a repository that was never created, and the
+    check above was happy with any https URL. A published wheel is hard to
+    correct, so the target is pinned here.
+    """
+    urls = PYPROJECT["project"]["urls"]
+    expected = {
+        "Homepage": f"{REPOSITORY}",
+        "Source": f"{REPOSITORY}",
+        "Issues": f"{REPOSITORY}/issues",
+        "Changelog": f"{REPOSITORY}/blob/main/CHANGELOG.md",
+    }
+    assert urls == expected
+    for text in (ROOT / "CHANGELOG.md", ROOT / "SECURITY.md", ROOT / "SUPPORT.md"):
+        body = text.read_text(encoding="utf-8")
+        assert REPOSITORY in body, text.name
+        assert "github.com/reprocheck/reprocheck" not in body, text.name
+
+
+def test_security_and_support_policies_exist_and_say_the_important_things() -> None:
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    assert "## What ReproCheck executes" in security
+    assert "The virtual environment is not a sandbox" in security
+    assert "reprocheck reproduce" in security
+    assert "--runtime-checks" in security
+    for word in ("container", "VM"):
+        assert word in security
+    assert "## Reporting a vulnerability in ReproCheck" in security
+    # The document must not become an attack manual.
+    assert "exploit code" in security
+    assert "security/advisories/new" in security
+
+    support = (ROOT / "SUPPORT.md").read_text(encoding="utf-8")
+    assert "## Status" in support
+    assert "## Requirements" in support
+    assert "3.11 or newer" in support
+    assert "## Known limitations" in support
+    assert "## What ReproCheck is not" in support
+    assert "Not a sandbox" in support
+    assert "Not proof that a study is reproducible" in support
+    assert f"{REPOSITORY}/issues" in support
 
 
 def test_readme_and_changelog_are_present() -> None:
@@ -274,13 +322,18 @@ def test_artifacts_carry_no_development_leftovers() -> None:
     import tarfile
     import zipfile
 
-    forbidden = (".git/", "__pycache__/", "/tests/", ".venv/", "reprocheck-report.")
+    # Never in either artifact: build state, caches, local reports.
+    forbidden = (".git/", "__pycache__/", ".venv/", "reprocheck-report.", "*.pyc")
+    # Never in the wheel: the wheel is what `pip install reprocheck` unpacks,
+    # and the test suite is not part of the runtime package.
+    wheel_only_forbidden = ("/tests/", "tests/test_")
     for path in sorted(DIST.glob("*.whl")):
         names = zipfile.ZipFile(path).namelist()
         assert any(name.endswith("reprocheck/cli.py") for name in names)
         assert not [name for name in names if "/tests/" in f"/{name}"]
         for name in names:
             assert not any(item in name for item in forbidden), name
+            assert not any(item in name for item in wheel_only_forbidden), name
     for path in sorted(DIST.glob("*.tar.gz")):
         with tarfile.open(path) as archive:
             names = archive.getnames()
@@ -288,6 +341,11 @@ def test_artifacts_carry_no_development_leftovers() -> None:
         assert any(name.endswith("LICENSE") for name in names)
         for name in names:
             assert not any(item in name for item in forbidden), name
+            assert "tests/fixtures" not in name, name
+        # The sdist deliberately carries the tests: it is a source
+        # distribution, and a user who has to debug a rule needs them.
+        assert any("/tests/" in f"/{name}" for name in names), path.name
+        assert any(name.endswith("CHANGELOG.md") for name in names), path.name
 
 
 @pytest.mark.skipif(not DIST.is_dir(), reason="dist/ does not exist")

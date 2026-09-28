@@ -55,10 +55,10 @@ dev = [
 reprocheck = "reprocheck.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/reprocheck/reprocheck"
-Source = "https://github.com/reprocheck/reprocheck"
-Issues = "https://github.com/reprocheck/reprocheck/issues"
-Changelog = "https://github.com/reprocheck/reprocheck/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/RafaelMoreiraDev/ReproCheck"
+Source = "https://github.com/RafaelMoreiraDev/ReproCheck"
+Issues = "https://github.com/RafaelMoreiraDev/ReproCheck/issues"
+Changelog = "https://github.com/RafaelMoreiraDev/ReproCheck/blob/main/CHANGELOG.md"
 
 [tool.setuptools.dynamic]
 version = { attr = "reprocheck.__version__" }
