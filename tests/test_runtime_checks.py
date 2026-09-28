@@ -291,7 +291,7 @@ def test_pytest_collection_succeeds(tmp_path, monkeypatch) -> None:
 
     assert collection["available"] is True
     assert collection["ran"] is True
-    assert collection["success"] is True
+    assert collection["success"] is True, collection
     assert collection["collected"] == 1
     assert "RC501" not in _ids(report)
 
@@ -345,7 +345,7 @@ def test_collection_runs_conftest_inside_the_copy(tmp_path, monkeypatch) -> None
     collection = report.reproduction["runtime_checks"]["pytest_collection"]
 
     assert collection["ran"] is True
-    assert marker.is_file(), "conftest.py must have been executed"
+    assert marker.is_file(), collection
     # The original project never received the marker.
     assert not (root / "conftest-ran.txt").exists()
     assert report.reproduction["original_project_unchanged"] is True
@@ -369,7 +369,8 @@ def test_tests_are_not_executed(tmp_path, monkeypatch) -> None:
 
     assert report.reproduction["runtime_checks"]["pytest_collection"]["ran"] is True
     assert report.reproduction["runtime_checks"]["pytest_collection"]["success"], (
-        "collection must have imported the test module"
+        "collection must have imported the test module: "
+        f"{report.reproduction['runtime_checks']['pytest_collection']}"
     )
     assert not marker.exists(), "test functions must not be executed"
 

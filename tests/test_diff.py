@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -779,10 +780,30 @@ def test_identity_ignores_the_project_name_but_not_the_path() -> None:
 
 
 def test_identity_is_case_insensitive_on_windows() -> None:
+    """Case folding is a Windows fact, not a portability choice.
+
+    The identity used to fold case on every platform, which made the test suite
+    pass on Linux while asserting something untrue about POSIX paths.
+    """
+    if sys.platform != "win32":
+        pytest.skip("case folding is only applied on Windows")
     other = report_document()
     other["project"]["path"] = "C:\\TMP\\Demo"
 
     ensure_same_project(report_document(), other)
+
+
+def test_identity_is_case_sensitive_on_posix() -> None:
+    """``/srv/Data`` and ``/srv/data`` are two different projects on Linux."""
+    if sys.platform == "win32":
+        pytest.skip("Windows paths are case insensitive")
+    first = report_document()
+    first["project"]["path"] = "/srv/Data"
+    second = report_document()
+    second["project"]["path"] = "/srv/data"
+
+    with pytest.raises(IdentityError):
+        ensure_same_project(first, second)
 
 
 def test_identity_ignores_the_git_head() -> None:
