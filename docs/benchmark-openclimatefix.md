@@ -5,7 +5,7 @@ repository and is never modified: ReproCheck only reads it.
 
 - Target: `C:\Projetos\OpenClimateFix\open-source-quartz-solar-forecast`
 - Commit scanned: `c07ad7402598979a7cd3c2eab7430098a3d56e78` (branch `main`, clean)
-- ReproCheck version: `0.7.0` (TASK-007 report run; detection unchanged since V0.6)
+- ReproCheck version: `0.8.0` (TASK-008 report run; detection unchanged since V0.6)
 - Date: 2026-09-27
 
 The `OCF-Bxx` list below is an **external benchmark only**. It was reconstructed by
@@ -297,8 +297,46 @@ directory is created by the clone.
   Docker action is used. ReproCheck does not claim that `checkout@v2` is
   obsolete — that would need external, temporal knowledge.
 
-## Read-only verification
+## Baseline comparison (V0.8)
 
+Two real reproductions of the same commit, one hour apart, produced by two
+different ReproCheck versions. Nothing was re-run for the comparison: the engine read the two report files.
+
+| | baseline | current |
+| --- | --- | --- |
+| ReproCheck | 0.7.0 | 0.8.0 |
+| Scanned | 19:57:34 UTC | 20:57:10 UTC |
+| Commit | `c07ad7402598` | `c07ad7402598` |
+| Verdict | `PARTIAL` | `PARTIAL` |
+| Installation | 197.325 s | 184.338 s |
+| Workspace | `…\Temp\reprocheck\20260927-165734-847f2331` | `…\Temp\reprocheck\20260927-205710-1e21f01a` |
+| Installed version | `0.0.1` | `0.0.1` |
+| Imports | 3/3 | 3/3 |
+
+**Result: `No material reproducibility changes detected.`** — despite a
+different duration (13 s), a different temporary directory, a different run id, a
+four-hour gap and a different ReproCheck version. `reprocheck_version` is
+reported as identity, not as a change, so a tool upgrade alone never looks like
+a reproducibility change.
+
+### One artificial change, one reported change
+
+A **copy** of the current report (the project was never touched) had exactly one
+fact altered:
+
+| Altered fact | Material changes reported |
+| --- | --- |
+| `installed_distribution.version`: `0.0.1` → `1.2.12` | 1 — `installed version — value: value=0.0.1 → value=1.2.12` |
+| `workflow_references[0].ref`: `main` → a 40-character SHA, `is_sha: true` | 1 — `…/branch_ci.yml@<sha> in api_branch_ci.yaml — immutability, ref: mutable reference → full commit SHA` |
+
+In both cases the diff contained nothing else: no timestamp, no duration, no
+workspace, no phantom finding. The RC220 findings did **not** move, because the
+`WorkflowReference` is a separate domain from the finding that quotes it — a
+change there is a change in a fact, and the finding only changes when the check
+runs again. That is a real gap: a comparison cannot tell that the finding *would*
+disappear, because the report it reads is a snapshot, not a re-analysis.
+
+## Read-only verification
 `git status --porcelain` returned 0 lines and `HEAD` remained
 `c07ad7402598979a7cd3c2eab7430098a3d56e78` before and after every scan and every
 reproduction attempt, including the one that installed 80 packages.

@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from collections import Counter
+from typing import TYPE_CHECKING
 
 from reprocheck.models import Finding, ScanReport, Severity
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard
+    from reprocheck.diff.models import ReproducibilityDiff
 
 _SEVERITY_LABEL = {
     Severity.ERROR: "ERROR",
@@ -312,3 +316,65 @@ def _tri_state(value: bool | None) -> str:
     if value is None:
         return "unknown"
     return "yes" if value else "no"
+
+
+# --------------------------------------------------------------------------- #
+# Baseline comparison
+# --------------------------------------------------------------------------- #
+
+
+def format_diff(
+    diff: ReproducibilityDiff,
+    json_path: str,
+    markdown_path: str,
+    baseline: str = "",
+    current: str = "",
+) -> str:
+    """Render a baseline comparison for the terminal."""
+    lines = ["ReproCheck baseline comparison", ""]
+    if baseline:
+        lines.append(f"Baseline: {baseline}")
+    if current:
+        lines.append(f"Current:  {current}")
+    lines.append("")
+    lines.append("Verdict:")
+    if diff.verdict.changed:
+        lines.append(
+            f"  {diff.verdict.previous or '(none)'} -> {diff.verdict.current or '(none)'}"
+        )
+    else:
+        lines.append(f"  {diff.verdict.current or '(none)'} (no change)")
+    lines.append("")
+
+    if not diff.has_changes:
+        lines.append("No material reproducibility changes detected.")
+        lines.append("")
+        lines.append("Report:")
+        lines.append(f"  {json_path}")
+        lines.append(f"  {markdown_path}")
+        return "\n".join(lines)
+
+    lines.append("Changes:")
+    lines.extend(_diff_counts(diff))
+    lines.append("")
+    lines.append("Report:")
+    lines.append(f"  {json_path}")
+    lines.append(f"  {markdown_path}")
+    return "\n".join(lines)
+
+
+def _diff_counts(diff: ReproducibilityDiff) -> list[str]:
+    lines = [
+        f"  {len(diff.findings.added)} finding(s) added",
+        f"  {len(diff.findings.resolved)} finding(s) resolved",
+        f"  {len(diff.findings.changed)} finding(s) changed",
+    ]
+    if diff.dependencies:
+        lines.append(f"  {len(diff.dependencies)} dependency change(s)")
+    if diff.python:
+        lines.append(f"  {len(diff.python)} Python declaration change(s)")
+    if diff.ci:
+        lines.append(f"  {len(diff.ci)} CI reference change(s)")
+    if diff.reproduction:
+        lines.append(f"  {len(diff.reproduction)} reproduction fact change(s)")
+    return lines

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,23 @@ def _write(root: Path, files: dict[str, str]) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
     return root
+
+
+@pytest.fixture(autouse=True)
+def isolated_state_dir(tmp_path: Path) -> None:
+    """Keep every default destination out of the real user state directory.
+
+    Since V0.8 the CLI writes reports to ``REPROCHECK_STATE_DIR`` when no
+    destination is given. Pointing it at the pytest temp directory means a test
+    that forgets ``--markdown`` cannot leave anything in the user's profile.
+    """
+    previous = os.environ.get("REPROCHECK_STATE_DIR")
+    os.environ["REPROCHECK_STATE_DIR"] = str(tmp_path / "state")
+    yield
+    if previous is None:
+        os.environ.pop("REPROCHECK_STATE_DIR", None)
+    else:
+        os.environ["REPROCHECK_STATE_DIR"] = previous
 
 
 @pytest.fixture
@@ -261,3 +279,297 @@ def make_wheel(
         records.append(f"{dist_info}/RECORD,,")
         archive.writestr(f"{dist_info}/RECORD", "\n".join(records) + "\n")
     return wheel
+
+
+# --------------------------------------------------------------------------- #
+# Report documents
+#
+# Report *documents* (the JSON shape) rather than report objects, because the
+# comparison engine only ever sees what was written to disk. The defaults are
+# the "clean project" state: no findings, one dependency, one Python
+# declaration, one CI reference and a successful reproduction.
+# --------------------------------------------------------------------------- #
+
+
+def report_document(
+    *,
+    timestamp: str = "2026-01-01T00:00:00+00:00",
+    reprocheck_version: str = "0.8.0",
+    schema: str = "6",
+    verdict: str = "NOT_ATTEMPTED",
+    findings: list[dict] | None = None,
+    declarations: list[dict] | None = None,
+    python_requirements: list[dict] | None = None,
+    workflow_references: list[dict] | None = None,
+    reproduction: dict | None = None,
+) -> dict:
+    """Return a report document shaped exactly like ``ScanReport.to_dict``."""
+    document: dict = {
+        "reprocheck_version": reprocheck_version,
+        "report_schema_version": schema,
+        "scan_timestamp": timestamp,
+        "project": {
+            "name": "demo",
+            "path": "C:/tmp/demo",
+            "python_file_count": 4,
+        },
+        "git": {
+            "is_repository": True,
+            "branch": "main",
+            "head": "0123456789abcdef0123456789abcdef01234567",
+            "is_clean": True,
+        },
+        "detected_files": [],
+        "python_requirements": (
+            python_requirements
+            if python_requirements is not None
+            else [
+                {
+                    "source": ".python-version",
+                    "value": "3.11",
+                    "file": ".python-version",
+                    "line": 1,
+                }
+            ]
+        ),
+        "package_manager_hints": [],
+        "readme_commands": [],
+        "findings": list(findings or []),
+        "dependencies": {
+            "declarations": (
+                declarations
+                if declarations is not None
+                else [dependency_declaration("numpy", "==1.23.5")]
+            ),
+            "includes": [],
+            "summary": {
+                "runtime": 1,
+                "dev": 0,
+                "test": 0,
+                "optional": 0,
+                "build": 0,
+                "constraint": 0,
+                "unique_packages": 1,
+            },
+        },
+        "workflow_references": (
+            workflow_references
+            if workflow_references is not None
+            else [
+                workflow_reference(
+                    "actions/checkout", "v4", ".github/workflows/ci.yml", 12
+                )
+            ]
+        ),
+        "verdict": {
+            "status": verdict,
+            "reasons": [] if verdict == "PASS" else ["synthetic"],
+            "not_verified": [
+                {"item": "full test suite", "reason": "never executed"},
+            ],
+        },
+        "facts": {},
+    }
+    if reproduction is not None:
+        document["reproduction"] = reproduction
+    return document
+
+
+def dependency_declaration(
+    name: str,
+    specifier: str = "",
+    *,
+    group: str = "project",
+    kind: str = "runtime",
+    reference: str | None = None,
+    reference_kind: str | None = None,
+    vcs_ref: str | None = None,
+    vcs_commit: str | None = None,
+    file: str = "pyproject.toml",
+    line: int | None = 7,
+) -> dict:
+    """One entry of ``dependencies.declarations``."""
+    return {
+        "name": name,
+        "raw_name": name,
+        "specifier": specifier,
+        "source": "pyproject",
+        "group": group,
+        "kind": kind,
+        "marker": None,
+        "extras": [],
+        "file": file,
+        "line": line,
+        "raw": f"{name}{specifier}",
+        "reference": reference,
+        "reference_kind": reference_kind,
+        "vcs_ref": vcs_ref,
+        "vcs_commit": vcs_commit,
+    }
+
+
+def workflow_reference(
+    target: str,
+    ref: str,
+    file: str = ".github/workflows/ci.yml",
+    line: int = 12,
+    *,
+    is_local: bool = False,
+    is_sha: bool = False,
+) -> dict:
+    """One entry of ``workflow_references``."""
+    return {
+        "file": file,
+        "line": line,
+        "raw": f"{target}@{ref}",
+        "target": target,
+        "ref": ref,
+        "reference_type": "action",
+        "job": "build",
+        "step": None,
+        "is_local": is_local,
+        "is_sha": is_sha,
+        "is_mutable": not (is_local or is_sha),
+    }
+
+
+def finding(
+    ident: str = "RC203",
+    message: str = "'requests' is declared without a version bound.",
+    *,
+    evidence: str = "requests",
+    severity: str = "info",
+    file: str = "pyproject.toml",
+    line: int | None = 7,
+    title: str = "Runtime dependency without a version constraint",
+) -> dict:
+    """One entry of ``findings``."""
+    return {
+        "id": ident,
+        "title": title,
+        "severity": severity,
+        "category": "dependencies",
+        "message": message,
+        "evidence": evidence,
+        "file": file,
+        "line": line,
+        "confidence": "high",
+    }
+
+
+def reproduction_document(
+    *,
+    python: str = "3.11.16",
+    strategy: str = "project",
+    install_success: bool = True,
+    pip_clean: bool = True,
+    conflicts: int = 0,
+    version: str = "1.2.3",
+    fallback: bool = False,
+    modules: tuple[str, ...] = ("api",),
+    failing: tuple[str, ...] = (),
+    runtime_checks: bool = True,
+    collection_available: bool = False,
+    collection_collected: int | None = None,
+    workspace: str = "C:/Temp/reprocheck/20260101-000000-abcdef01",
+    duration: float = 12.5,
+    unchanged: bool = True,
+) -> dict:
+    """A ``reproduction`` section shaped like ``ReproductionReport.to_dict``."""
+    return {
+        "attempted": True,
+        "workspace": None,
+        "workspace_kept": False,
+        "source": f"{workspace}/source",
+        "original_project": "C:/tmp/demo",
+        "network_enabled": True,
+        "runtime_checks_enabled": runtime_checks,
+        "python": {
+            "selected": python,
+            "executable": "C:/Python311/python.exe",
+            "reason": "lowest installed version satisfying >=3.11",
+        },
+        "venv": {
+            "path": f"{workspace}/venv",
+            "python": f"{workspace}/venv/Scripts/python.exe",
+            "python_version": python,
+            "initial_pip_version": "pip 24.0",
+            "created": True,
+            "duration_seconds": 3.2,
+        },
+        "installation": {
+            "strategy": strategy,
+            "command": ["python", "-m", "pip", "install", "C:/tmp/demo"],
+            "cwd": f"{workspace}/source",
+            "source": f"{workspace}/source",
+            "venv": f"{workspace}/venv",
+            "network_enabled": True,
+            "exit_code": 0 if install_success else 1,
+            "duration_seconds": duration,
+            "success": install_success,
+            "stdout_path": f"{workspace}/logs/install.stdout.log",
+            "stderr_path": f"{workspace}/logs/install.stderr.log",
+            "stdout_snippet": "Successfully installed demo-1.2.3",
+            "stderr_snippet": "",
+        },
+        "pip_check": {
+            "ran": True,
+            "clean": pip_clean,
+            "exit_code": 0 if pip_clean else 1,
+            "conflict_count": conflicts,
+            "conflicts": ["alpha requires sharedlib==1.0, but 2.0 is installed"][
+                :conflicts
+            ],
+            "stdout_path": f"{workspace}/logs/pip-check.stdout.log",
+        },
+        "installed_distribution": {
+            "name": "demo",
+            "version": version,
+            "looks_like_fallback": fallback,
+            "note": None,
+        },
+        "runtime_checks": {
+            "enabled": runtime_checks,
+            "import_discovery": "distribution 'demo' provides 1 top-level module",
+            "imports": [
+                {
+                    "module": module,
+                    "imported": module not in failing,
+                    "exit_code": 0 if module not in failing else 1,
+                    "timed_out": False,
+                    "duration_seconds": 0.4,
+                    "stderr_snippet": "",
+                    "stderr_path": f"{workspace}/logs/import-{module}.log",
+                }
+                for module in modules
+            ],
+            "pytest_collection": {
+                "available": collection_available,
+                "ran": collection_available,
+                "success": True if collection_available else None,
+                "exit_code": 0 if collection_available else None,
+                "collected": collection_collected,
+                "duration_seconds": 1.1 if collection_available else None,
+                "reason": (
+                    None
+                    if collection_available
+                    else "pytest is not installed in the reproduced environment"
+                ),
+            },
+        },
+        "original_project_unchanged": unchanged,
+        "integrity": {
+            "captured_before": True,
+            "unchanged": unchanged,
+            "git_head_before": "0123456789abcdef0123456789abcdef01234567",
+            "git_head_after": "0123456789abcdef0123456789abcdef01234567",
+            "tracked_files": 42,
+            "changed_paths": [] if unchanged else ["data/out.csv"],
+        },
+        "completed_steps": [
+            "static scan",
+            "workspace created",
+            "python selected: 3.11.16",
+            "installation succeeded",
+        ],
+    }

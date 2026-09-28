@@ -729,6 +729,9 @@ def test_original_project_is_never_modified(make_project, tmp_path) -> None:
 def test_cli_scan_writes_both_reports(
     make_project, tmp_path, monkeypatch, capsys
 ) -> None:
+    # The default destination is the state directory, never the analysed project.
+    state = tmp_path / "state"
+    monkeypatch.setenv("REPROCHECK_STATE_DIR", str(state))
     monkeypatch.chdir(tmp_path)
     root = make_project(inhouse_backend_files("rc-cli-scan"))
 
@@ -736,8 +739,10 @@ def test_cli_scan_writes_both_reports(
     output = capsys.readouterr().out
 
     assert code == EXIT_OK
-    assert (tmp_path / "reprocheck-report.json").is_file()
-    assert (tmp_path / "reprocheck-report.md").is_file()
+    written = list(state.rglob("reprocheck-report.json"))
+    assert len(written) == 1
+    assert list(state.rglob("reprocheck-report.md"))
+    assert not (tmp_path / "reprocheck-report.json").exists()
     assert "Verdict: NOT_ATTEMPTED" in output
     assert "reprocheck-report.md" in output
     assert "Not verified" in output

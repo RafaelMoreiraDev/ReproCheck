@@ -71,7 +71,9 @@ python -m pip install -e ".[dev]"
 
 ```powershell
 reprocheck scan C:\Projetos\some-project
-reprocheck reproduce C:\Projetos\some-project
+reprocheck reproduce C:\Projetos\some-project --network --runtime-checks
+reprocheck baseline save reprocheck-report.json --output baseline.json
+reprocheck baseline compare baseline.json reprocheck-report.json
 ```
 
 or, without installing the console script:
@@ -79,30 +81,60 @@ or, without installing the console script:
 ```powershell
 python -m reprocheck scan C:\Projetos\some-project
 python -m reprocheck reproduce C:\Projetos\some-project
+python -m reprocheck baseline compare baseline.json reprocheck-report.json
 ```
 
 `scan` options:
 
 | Option | Description |
 | --- | --- |
-| `--json <arquivo>` | JSON report destination. Default: `./reprocheck-report.json` |
-| `--markdown <arquivo>` | Markdown report destination. Default: `./reprocheck-report.md` |
+| `--json <arquivo>` | JSON report destination. Default: the state directory (below) |
+| `--markdown <arquivo>` | Markdown report destination. Default: the state directory |
+| `--output-dir <diretorio>` | Directory for both files when the two above are absent |
 | `--verbose` | Also print HEAD, package manager hints and README commands |
 
-`reproduce` takes the same two report options, plus `--network`,
+`reproduce` takes the same three destination options, plus `--network`,
 `--keep-workspace`, `--runtime-checks` and `--verbose`.
+
+### Where files are written
+
+With **no** destination given, reports go to a per-user state directory, in a
+sub-directory named after the analysed project:
+
+| Platform | Location |
+| --- | --- |
+| override | `REPROCHECK_STATE_DIR` (used by the test suite and by CI) |
+| Windows | `%LOCALAPPDATA%\reprocheck` |
+| other | `$XDG_STATE_HOME/reprocheck`, or `~/.local/state/reprocheck` |
+
+```text
+<state>/reprocheck/<name>-<8 hex of the project path>/reprocheck-report.json
+<state>/reprocheck/<name>-<8 hex of the project path>/reprocheck-report.md
+<state>/reprocheck/<name>-<8 hex of the project path>/reprocheck-diff.json
+<state>/reprocheck/<name>-<8 hex of the project path>/reprocheck-diff.md
+<state>/reprocheck/<name>-<8 hex of the project path>/baseline.json
+```
+
+**Breaking change in V0.8:** V0.7 wrote the reports to the current working
+directory, which silently dirtied a repository when ReproCheck ran from inside
+the project it was analysing. Nothing is now written inside a project unless you
+ask for it with `--json`, `--markdown`, `--output-dir` or `--output`. Explicit
+paths are used verbatim, so a script that passes its own destination keeps
+working unchanged. The path of both files is always printed.
 
 ### Exit codes
 
-| Code | `scan` | `reproduce` |
-| --- | --- | --- |
-| `0` | report written | verdict is `PASS` |
-| `1` | — | verdict is `PARTIAL` |
-| `2` | — | verdict is `FAIL` |
-| `3` | path unusable, or a report could not be written | same |
+| Code | `scan` | `reproduce` | `baseline save` / `compare` |
+| --- | --- | --- | --- |
+| `0` | report written | verdict is `PASS` | done (a comparison returns `0` whether or not anything changed) |
+| `1` | — | verdict is `PARTIAL` | — |
+| `2` | — | verdict is `FAIL` | — |
+| `3` | path unusable, or a report could not be written | same | baseline missing, invalid, unknown schema, or refusing to overwrite |
 
 `2` is also what argparse uses for a malformed command line, which is why
-operational errors use `3`.
+operational errors use `3`. A change is a fact, not an error: `compare` never
+signals "something changed" through the exit code.
+
 
 ### Example
 
@@ -171,8 +203,8 @@ CI findings
   WARN RC220 External GitHub Action/workflow 'actions/checkout' is referenced by the mutable ref 'v2' ...
 
 Report:
-  C:\Projetos\ReproCheck\reprocheck-report.json
-  C:\Projetos\ReproCheck\reprocheck-report.md
+  C:\Users\you\AppData\Local\reprocheck\example-1a2b3c4d\reprocheck-report.json
+  C:\Users\you\AppData\Local\reprocheck\example-1a2b3c4d\reprocheck-report.md
 ```
 
 ### The verdict
@@ -229,14 +261,125 @@ findings always produce the same recommendations.
 - **RC150** — Reproduce with VCS metadata available if the exact package version matters, or record the released version explicitly.
 - **RC220** — Consider pinning the external GitHub Action/workflow to a full commit SHA if immutable CI inputs are required.
 - **RC401** — Inspect the installation log before changing dependencies; the cause may be the index, the interpreter or the project itself.
+````
+
+## Baselines: what changed (V0.8)
+
+A **baseline** is a report kept as the reference of a later comparison. The
+comparison is a pure function of the two reports: nothing is re-run, nothing is
+reinstalled, and the analysed project is never opened.
+
+```powershell
+# 1. produce a report and keep it as the reference
+reprocheck scan C:\Projetos\some-project --json .\report.json
+reprocheck baseline save .\report.json --output .\baseline.json
+
+# 2. later, compare whatever the same command produces now
+reprocheck scan C:\Projetos\some-project --json .\report.json
+reprocheck baseline compare .\baseline.json .\report.json
 ```
+
+`save` refuses to replace an existing baseline unless `--force` is given, and
+validates before accepting: valid JSON, produced by ReproCheck, a known
+`report_schema_version`, and the minimum keys the comparison reads. A baseline
+may also be an older report (schemas `1`–`6` are accepted; the sections an old
+schema does not have are reported as "not compared" in the terminal). An unknown
+schema, now or in the future, is refused with a clear error rather than compared
+silently.
+
+The report inside a baseline is stored **verbatim**: a baseline is evidence.
+
+### What a comparison looks at
+
+| Domain | Identity | Compared attributes |
+| --- | --- | --- |
+| findings | `id` + file + normalised evidence | title, severity, confidence, category, message |
+| dependencies | name + kind + group | specifier, reference kind, reference, VCS ref/commit, source |
+| Python | declaration source | value, file |
+| CI | target + file | ref, reference type, immutability |
+| reproduction | one key per observed fact | selected Python, strategy, install success, `pip check`, installed distribution, each import, collection, integrity |
+
+Identity is what decides whether two entries are the same thing. Two entries
+with different identities are two facts, whatever the wording: an aggregated
+finding whose set of packages changed appears as one **resolved** plus one
+**added**, not as an edit. The same applies to a dependency that moved from the
+`dev` group to the project group.
+
+### What a comparison ignores
+
+Timestamps, installation and command durations, the temporary workspace and its
+run id, log paths, the interpreter executable, the order of two independent
+lists, and **line numbers**: inserting one line renumbers every finding below
+it. Two equivalent runs, taken minutes apart, must compare as *no material
+changes*, and the tests assert exactly that.
+
+The verdict movement is reported with `previous` and `current` only. ReproCheck
+does not call it an improvement or a regression: the two reports describe two
+points in time, and a `PASS` today with a `FAIL` last month can mean a different
+commit, a different machine or a different index.
+
+### Comparison outputs
+
+`reprocheck-diff.json` (structured) and `reprocheck-diff.md` (for humans), in the
+state directory or wherever `--json`/`--markdown`/`--output-dir` point:
+
+```markdown
+# ReproCheck Baseline Comparison
+
+## Summary
+
+- Baseline: demo
+  commit `0123456789ab`
+  scanned 2026-01-01T00:00:00+00:00
+- Current: demo
+  commit `89abcdef0123`
+  scanned 2026-06-30T23:59:59+00:00
+
+Verdict: PARTIAL → FAIL
+
+Material changes: 3
+
+## Verdict
+
+The verdict changed from PARTIAL to FAIL.
+
+## New problems
+
+RC401 — NEW IN THE COMPARISON
+The installation failed.
+
+## Changed facts
+
+### Dependencies
+
+- **numpy (project)** — specifier: `specifier===1.23.5` → `specifier=>=1.26,<2`
+```
+
+Terminal output, and what happens when nothing changed:
+
+```text
+ReproCheck baseline comparison
+
+Verdict:
+  PARTIAL -> PARTIAL
+
+Changes:
+  1 finding(s) added
+  1 finding(s) resolved
+  1 dependency change(s)
+```
+
+```text
+No material reproducibility changes detected.
+```
+
 
 
 ### Report
 
 ```json
 {
-  "reprocheck_version": "0.7.0",
+  "reprocheck_version": "0.8.0",
   "report_schema_version": "6",
 
   "scan_timestamp": "2026-01-01T12:00:00+00:00",
@@ -366,7 +509,7 @@ Abridged example:
 - Project: quartz-solar-forecast
 - Path: C:\Projetos\OpenClimateFix\open-source-quartz-solar-forecast
 - Scan time: 2026-09-27T16:31:04+00:00
-- ReproCheck version: 0.7.0
+- ReproCheck version: 0.8.0
 - Reproduction verdict: **PARTIAL**
 - Why:
   - 3 open warning(s): RC150, RC203, RC220
@@ -682,17 +825,32 @@ real external repository, including the problems it does **not** detect, and
   with a single mutable CI action reference is `PARTIAL`.
 - The Markdown report repeats the JSON content for humans; it is not a
   different analysis, and it adds no conclusion of its own.
+- A comparison sees only what a report records. A finding that moved from one
+  file to another is a resolution plus an addition, a dependency that changed
+  group is a resolution plus an addition, and a finding whose message was
+  reworded is an edit even when the underlying fact is identical.
+- The identity of a finding uses its evidence text, so a reworded message that
+  keeps the same evidence is an edit while a different evidence string is a
+  different fact. That is a deliberate trade: stability over precision.
+- A comparison cannot tell *why* something changed. Two reports of the same
+  commit on two machines can differ, and the diff reports the difference without
+  attributing a cause.
+- Older baselines are accepted and normalised by absence, so a schema `1`
+  baseline compares only the findings. Nothing is migrated or guessed.
+- Reports now go to a per-user state directory, which means two people do not
+  share a baseline by default and a CI job needs `REPROCHECK_STATE_DIR` or an
+  explicit path to keep one between runs.
 - No AI, no auto-fix and no scoring. The recommendations are static sentences
   attached to finding IDs, not advice derived from the project. The network is
   only used by an explicit `--network` during installation.
 
 ## Roadmap
 
-- `0.8` — baseline reports: store a report and diff it against a new scan to
-  show reproducibility drift over time.
 - `0.9` — `setup.cfg`, `Pipfile` and Conda dependency sources, PEP 735
   `include-group` resolution, and non-Python ecosystems (Node).
 - later — an explicit opt-in mode that preserves Git metadata in the
   reproduction copy, so a tag-derived version can be reproduced, plus entry
   point based import discovery.
+- later — comparing more than two points in time, so a drift becomes a trend
+  instead of a pair.
 

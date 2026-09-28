@@ -4,18 +4,29 @@ Exit codes
 ----------
 
 ``0``
-    The command completed and the verdict is ``PASS`` (or the command was a
-    ``scan``, which never attempts a reproduction).
+    The command completed. For ``reproduce`` the verdict is ``PASS``; for
+    ``baseline compare`` the comparison completed, **whether or not anything
+    changed** — a change is a fact, not an error.
 ``1``
-    The verdict is ``PARTIAL``: the reproduction succeeded as far as it went,
-    but something important is unverified or a warning is open.
+    ``reproduce`` only: the verdict is ``PARTIAL``.
 ``2``
-    The verdict is ``FAIL``: a failure of the reproduction itself was observed.
+    ``reproduce`` only: the verdict is ``FAIL``.
 ``3``
-    Operational error: the path is unusable or a report could not be written.
+    Operational error: the path is unusable, a report could not be written, or a
+    baseline was missing, invalid or written in an unknown schema.
 
 ``2`` is also what argparse itself uses for a malformed command line, which is
-why operational errors use ``3`` instead.
+why operational errors use ``3``.
+
+Where files are written
+-----------------------
+
+With no destination given, reports go to a per-user state directory
+(``REPROCHECK_STATE_DIR``, else ``%LOCALAPPDATA%\\reprocheck`` on Windows, else
+``$XDG_STATE_HOME/reprocheck`` or ``~/.local/state/reprocheck``), in a
+sub-directory named after the analysed project. Nothing is ever written inside
+the analysed project unless the user asks for it with ``--json``,
+``--markdown``, ``--output-dir`` or ``--output``.
 """
 
 from __future__ import annotations
@@ -25,14 +36,25 @@ import sys
 from pathlib import Path
 
 from reprocheck import __version__
-from reprocheck.models import ScanReport, VerdictStatus
-from reprocheck.reporters import (
-    DEFAULT_MARKDOWN_NAME,
-    DEFAULT_REPORT_NAME,
-    format_report,
-    write_markdown,
-    write_report,
+from reprocheck.diff import (
+    BaselineError,
+    compare_reports,
+    load_baseline,
+    load_report,
+    save_baseline,
 )
+from reprocheck.models import ScanReport, VerdictStatus
+from reprocheck.output import (
+    BASELINE_NAME,
+    DIFF_MARKDOWN_NAME,
+    DIFF_NAME,
+    REPORT_MARKDOWN_NAME,
+    REPORT_NAME,
+    resolve_destination,
+)
+from reprocheck.reporters import format_report, write_markdown, write_report
+from reprocheck.reporters.diff import write_diff_json, write_diff_markdown
+from reprocheck.reporters.terminal import format_diff
 from reprocheck.reproduction.runner import ReproductionError, reproduce
 from reprocheck.scanner import ScanError, scan
 
@@ -52,8 +74,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="reprocheck",
         description=(
             "Read-only reproducibility scanner for Python projects. "
-            "ReproCheck inspects a directory and writes a JSON report plus a "
-            "Markdown report; it never modifies the scanned project."
+            "ReproCheck inspects a directory and writes a JSON report, a Markdown "
+            "report and, on request, a comparison against a saved baseline; it "
+            "never modifies the scanned project."
         ),
     )
     parser.add_argument(
@@ -64,7 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser = subparsers.add_parser(
         "scan", help="analyse a project directory and write both reports"
     )
-    _add_common_arguments(scan_parser)
+    _add_report_arguments(scan_parser)
+    scan_parser.add_argument(
+        "path", metavar="<path>", help="path of the project to scan"
+    )
     scan_parser.add_argument(
         "--verbose",
         action="store_true",
@@ -78,7 +104,10 @@ def build_parser() -> argparse.ArgumentParser:
             "workspace; the analysed project is never modified"
         ),
     )
-    _add_common_arguments(reproduce_parser)
+    _add_report_arguments(reproduce_parser)
+    reproduce_parser.add_argument(
+        "path", metavar="<path>", help="path of the project to reproduce"
+    )
     reproduce_parser.add_argument(
         "--network",
         action="store_true",
@@ -102,23 +131,92 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the reproduction steps and log locations",
     )
+
+    _add_baseline_parsers(subparsers)
     return parser
 
 
-def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("path", metavar="<path>", help="path of the project to analyse")
+def _add_report_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--json",
         metavar="<arquivo>",
         default=None,
-        help=f"JSON report destination (default: ./{DEFAULT_REPORT_NAME})",
+        help=f"JSON report destination (default: the state directory, {REPORT_NAME})",
     )
     parser.add_argument(
         "--markdown",
         metavar="<arquivo>",
         default=None,
-        help=f"Markdown report destination (default: ./{DEFAULT_MARKDOWN_NAME})",
+        help=(
+            "Markdown report destination (default: the state directory, "
+            f"{REPORT_MARKDOWN_NAME})"
+        ),
     )
+    parser.add_argument(
+        "--output-dir",
+        metavar="<diretorio>",
+        default=None,
+        help=(
+            "directory for both reports when --json/--markdown are not given; "
+            "explicit paths always win"
+        ),
+    )
+
+
+def _add_baseline_parsers(subparsers) -> None:
+    baseline = subparsers.add_parser(
+        "baseline", help="save a report as a reference, or compare against one"
+    )
+    baseline_actions = baseline.add_subparsers(dest="action", required=True)
+
+    save = baseline_actions.add_parser(
+        "save", help="save a report as a baseline for later comparisons"
+    )
+    save.add_argument(
+        "report", metavar="<report.json>", help="JSON report to use as baseline"
+    )
+    save.add_argument(
+        "--output",
+        metavar="<arquivo>",
+        default=None,
+        help=f"baseline destination (default: the state directory, {BASELINE_NAME})",
+    )
+    save.add_argument(
+        "--force",
+        action="store_true",
+        help="replace an existing baseline instead of refusing",
+    )
+
+    compare = baseline_actions.add_parser(
+        "compare", help="compare a report against a saved baseline"
+    )
+    compare.add_argument(
+        "baseline", metavar="<baseline.json>", help="baseline to compare against"
+    )
+    compare.add_argument("report", metavar="<report.json>", help="report to compare")
+    compare.add_argument(
+        "--json",
+        metavar="<arquivo>",
+        default=None,
+        help=f"diff destination (default: the state directory, {DIFF_NAME})",
+    )
+    compare.add_argument(
+        "--markdown",
+        metavar="<arquivo>",
+        default=None,
+        help=f"Markdown diff destination (default: {DIFF_MARKDOWN_NAME})",
+    )
+    compare.add_argument(
+        "--output-dir",
+        metavar="<diretorio>",
+        default=None,
+        help="directory for both diff files when --json/--markdown are not given",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Commands
+# --------------------------------------------------------------------------- #
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -128,6 +226,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "reproduce":
         return _run_reproduce(args)
+    if args.command == "baseline":
+        if args.action == "save":
+            return _run_baseline_save(args)
+        return _run_baseline_compare(args)
     if args.command != "scan":  # pragma: no cover - argparse enforces this
         parser.print_help()
         return EXIT_USAGE
@@ -139,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OPERATIONAL
 
     try:
-        output, markdown = _write_reports(report, args)
+        output, markdown = _write_reports(report, args, args.path)
     except OSError as exc:
         print(f"reprocheck: error: could not write report: {exc}", file=sys.stderr)
         return EXIT_OPERATIONAL
@@ -163,7 +265,7 @@ def _run_reproduce(args: argparse.Namespace) -> int:
         return EXIT_OPERATIONAL
 
     try:
-        output, markdown = _write_reports(report, args)
+        output, markdown = _write_reports(report, args, args.path)
     except OSError as exc:
         print(f"reprocheck: error: could not write report: {exc}", file=sys.stderr)
         return EXIT_OPERATIONAL
@@ -174,17 +276,103 @@ def _run_reproduce(args: argparse.Namespace) -> int:
     return _exit_code(report)
 
 
-def _write_reports(report: ScanReport, args: argparse.Namespace) -> tuple[Path, Path]:
+def _run_baseline_save(args: argparse.Namespace) -> int:
+    try:
+        report = load_report(args.report)
+        destination = (
+            Path(args.output).expanduser()
+            if args.output
+            else _default_baseline_path(report)
+        )
+        written = save_baseline(
+            report, destination, force=args.force, source=args.report
+        )
+    except BaselineError as exc:
+        print(f"reprocheck: error: {exc}", file=sys.stderr)
+        return EXIT_OPERATIONAL
+    except OSError as exc:
+        print(f"reprocheck: error: could not write baseline: {exc}", file=sys.stderr)
+        return EXIT_OPERATIONAL
+
+    identity = load_baseline(written).identity
+    print("ReproCheck baseline saved")
+    print("")
+    print(f"  project: {identity.name}")
+    if identity.path:
+        print(f"  path: {identity.path}")
+    print(f"  report schema: {identity.report_schema_version}")
+    print(f"  baseline: {written}")
+    return EXIT_OK
+
+
+def _run_baseline_compare(args: argparse.Namespace) -> int:
+    try:
+        baseline = load_baseline(args.baseline)
+        current = load_report(args.report)
+        diff = compare_reports(baseline.report, current)
+        project = (current.get("project") or {}).get("path")
+        json_destination = resolve_destination(
+            args.json, DIFF_NAME, args.output_dir, project
+        )
+        markdown_destination = resolve_destination(
+            args.markdown, DIFF_MARKDOWN_NAME, args.output_dir, project
+        )
+        json_path = write_diff_json(diff, json_destination)
+        markdown_path = write_diff_markdown(diff, markdown_destination)
+    except BaselineError as exc:
+        print(f"reprocheck: error: {exc}", file=sys.stderr)
+        return EXIT_OPERATIONAL
+    except OSError as exc:
+        print(
+            f"reprocheck: error: could not write the comparison: {exc}", file=sys.stderr
+        )
+        return EXIT_OPERATIONAL
+
+    absent = baseline.absent_sections()
+    print(
+        format_diff(
+            diff,
+            str(json_path),
+            str(markdown_path),
+            baseline=str(args.baseline),
+            current=str(args.report),
+        )
+    )
+    if absent:
+        print("")
+        print(
+            "  note: the baseline predates these report sections, which were not "
+            f"compared: {', '.join(absent)}"
+        )
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+
+
+def _write_reports(
+    report: ScanReport, args: argparse.Namespace, project: str
+) -> tuple[Path, Path]:
     """Write the JSON report (primary) and the Markdown report."""
-    json_destination = (
-        Path(args.json) if args.json else Path.cwd() / DEFAULT_REPORT_NAME
+    output = write_report(
+        report, resolve_destination(args.json, REPORT_NAME, args.output_dir, project)
     )
-    markdown_destination = (
-        Path(args.markdown) if args.markdown else Path.cwd() / DEFAULT_MARKDOWN_NAME
+    markdown = write_markdown(
+        report,
+        resolve_destination(
+            args.markdown, REPORT_MARKDOWN_NAME, args.output_dir, project
+        ),
     )
-    output = write_report(report, json_destination)
-    markdown = write_markdown(report, markdown_destination)
     return output, markdown
+
+
+def _default_baseline_path(report: dict) -> Path:
+    from reprocheck.output import project_output_dir
+
+    project = (report.get("project") or {}).get("path")
+    return project_output_dir(project) / BASELINE_NAME
 
 
 def _exit_code(report: ScanReport) -> int:

@@ -132,10 +132,10 @@ so a report never points at a directory that no longer exists.
 
 ## What the reports contain
 
-The two reports are written to the paths chosen on the command line (by default
-`./reprocheck-report.json` and `./reprocheck-report.md` in the current
-directory) and nowhere else. Neither file can contain more than what the run
-observed:
+The reports are written to the paths chosen on the command line, or to the
+per-user state directory when none is given (see "Where files are written" in
+`README.md`), and nowhere else. Nothing is ever written inside the analysed
+project. Neither file can contain more than what the run observed:
 
 | Field | Source |
 | --- | --- |
@@ -143,7 +143,8 @@ observed:
 | `reproduction` | the steps that ran, the exit codes and the log paths |
 | `verdict` | a derivation of the findings: `PASS`, `PARTIAL`, `FAIL` or `NOT_ATTEMPTED`, with the reasons |
 | `verdict.not_verified` | what was never checked, with the reason; never a failure |
-| Markdown report | the same content, arranged for a reader; no conclusion of its own |
+| Markdown report | The same content, arranged for a reader; no conclusion of its own |
+| baseline / diff | Two report documents compared; no project is opened and no step is re-run |
 
 The verdict cannot turn a `scan` into an execution: `NOT_ATTEMPTED` is the only
 verdict a `scan` can produce, whatever the findings are. It is a label, not a
@@ -156,12 +157,32 @@ CI revisions were never checked.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | the command completed; for `reproduce`, the verdict is `PASS` |
+| `0` | the command completed; for `reproduce`, the verdict is `PASS`; for `baseline compare`, the comparison completed **whether or not anything changed** |
 | `1` | the verdict is `PARTIAL` |
 | `2` | the verdict is `FAIL` |
-| `3` | operational error: the path is unusable or a report could not be written |
+| `3` | operational error: the path is unusable, a report could not be written, or a baseline was missing, invalid, in an unknown schema, or already present |
 
 Code `2` is also argparse's own code for a malformed command line, which is why
 operational errors use `3`. A failed attempt keeps its workspace and therefore
 its logs, exactly as before; nothing about the reproduction behaviour changed to
 produce a verdict.
+
+## What a baseline comparison does and does not do
+
+`reprocheck baseline` is the only command family that reads two files instead of
+analysing a directory, and it is the least invasive:
+
+- it **never** opens the analysed project: both sides are report documents;
+- it **never** re-runs a check, an installation, an import or a collection, so
+  enabling `--runtime-checks` is not needed to compare two reports and no project
+  code is executed by a comparison;
+- it **never** writes to a baseline unless `save` was asked to, and `save`
+  refuses to replace an existing one without `--force`;
+- it makes no network request and installs nothing.
+
+The comparison is therefore safe to run on a report from an untrusted source, in
+the sense that the input is treated as data: an invalid, truncated or
+foreign document is refused with an operational error instead of being
+interpreted. Two limits remain: a report can contain text copied from another
+project, and a very large file is read into memory, so a hostile report is a
+resource question, not a correctness one.

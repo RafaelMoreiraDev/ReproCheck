@@ -21,14 +21,18 @@ PROJECT = {
 
 
 def test_scan_writes_default_report(make_project, tmp_path, monkeypatch) -> None:
+    state = tmp_path / "state"
+    monkeypatch.setenv("REPROCHECK_STATE_DIR", str(state))
     root = make_project(PROJECT)
     monkeypatch.chdir(tmp_path)
 
     assert main(["scan", str(root)]) == EXIT_OK
 
-    report = tmp_path / "reprocheck-report.json"
-    assert report.is_file()
-    data = json.loads(report.read_text(encoding="utf-8"))
+    # The default destination is the per-project state directory, so running
+    # ReproCheck from inside a project does not write anything into it.
+    reports = list(state.rglob("reprocheck-report.json"))
+    assert len(reports) == 1
+    data = json.loads(reports[0].read_text(encoding="utf-8"))
     assert data["project"]["name"] == "example"
     assert data["project"]["python_file_count"] == 1
 
