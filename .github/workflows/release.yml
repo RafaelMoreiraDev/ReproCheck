@@ -67,17 +67,24 @@ jobs:
           set -eu
           tag_version="${GITHUB_REF_NAME#v}"
           package_version="$(python -c "import reprocheck; print(reprocheck.__version__)")"
+          # The distribution is "reprocheck-cli", but setuptools normalises the
+          # hyphen to an underscore in the artifact filename, per PEP 427. The
+          # check has to look for what is actually written to disk.
+          wheel="dist/reprocheck_cli-${package_version}-py3-none-any.whl"
+          sdist="dist/reprocheck_cli-${package_version}.tar.gz"
           echo "tag:     $tag_version"
           echo "package: $package_version"
           if [ "$tag_version" != "$package_version" ]; then
             echo "refusing to release: $GITHUB_REF_NAME does not match the package version"
             exit 1
           fi
-          if [ ! -f "dist/reprocheck-$package_version-py3-none-any.whl" ]; then
-            echo "refusing to release: dist/ has no wheel for $package_version"
-            ls -1 dist || true
-            exit 1
-          fi
+          for artifact in "$wheel" "$sdist"; do
+            if [ ! -f "$artifact" ]; then
+              echo "refusing to release: $artifact is missing"
+              ls -1 dist || true
+              exit 1
+            fi
+          done
           echo "tag and package agree on $package_version"
 
       - name: Record the digests

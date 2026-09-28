@@ -4,6 +4,32 @@ All notable changes to ReproCheck are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [PEP 440](https://peps.python.org/pep-0440/) versions.
 
+## [0.11.0b3] — 2026-09-28
+
+The distribution is renamed. Nothing about how the tool behaves changes.
+
+### Changed
+
+- **The distribution is now `reprocheck-cli`.** The PyPI refuses to register
+  `reprocheck` for similarity with an unrelated project that already owns
+  `repro-check`, and the name was not worth fighting for. The product is still
+  **ReproCheck**, the command is still **`reprocheck`**, the importable package is
+  still **`reprocheck`**, and the repository is still
+  [`RafaelMoreiraDev/ReproCheck`](https://github.com/RafaelMoreiraDev/ReproCheck).
+  Only the name on the index changed, and the install command with it:
+
+  ```bash
+  pip install reprocheck-cli
+  ```
+
+  `reprocheck.__init__` exports `DISTRIBUTION_NAME` so the name lives in one
+  place, and the Trusted Publisher on the PyPI side is registered for
+  `reprocheck-cli`.
+
+- Bumped past `0.11.0b2`, which was the version prepared for the release
+  pipeline change and was never published. Keeping it would have published a
+  version whose metadata name no longer matches the index.
+
 ## [0.11.0b2] — 2026-09-28
 
 The first release published to the real PyPI. No functional change from
@@ -107,5 +133,6 @@ GitHub release, no tag, no remote.
 - Only one kind of fix can be applied (`RC140`), and only one suggestion at a
   time. There is no "apply all" and no interactive prompt.
 
+[0.11.0b3]: https://github.com/RafaelMoreiraDev/ReproCheck/releases
 [0.11.0b2]: https://github.com/RafaelMoreiraDev/ReproCheck/releases
 [0.11.0b1]: https://github.com/RafaelMoreiraDev/ReproCheck/releases

@@ -23,8 +23,11 @@ content into a Markdown report a person can read without knowing any check ID.
 ## Install
 
 ```powershell
-python -m pip install reprocheck
+python -m pip install reprocheck-cli
 ```
+
+The distribution on PyPI is `reprocheck-cli`; the command is `reprocheck` and
+the importable package is `reprocheck`.
 
 Requires Python 3.11 or newer. The only runtime dependency is
 [`packaging`](https://pypi.org/project/packaging/).

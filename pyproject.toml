@@ -3,7 +3,13 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "reprocheck"
+name = "reprocheck-cli"
+# The distribution is named "reprocheck-cli" because the PyPI refuses
+# "reprocheck" for similarity with an unrelated project that already owns
+# "repro-check". The product is still ReproCheck, the command is still
+# `reprocheck`, and the importable package is still `reprocheck`. Only the name
+# on the index changed, and it is the only thing that had to.
+#
 # The version lives in exactly one place: src/reprocheck/__init__.py. Declaring
 # it dynamic here means pyproject and the package can never disagree.
 dynamic = ["version"]

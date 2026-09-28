@@ -86,8 +86,46 @@ def test_cli_reports_the_package_version() -> None:
 
 
 def test_console_script_is_declared() -> None:
+    """The command is ``reprocheck`` whatever the distribution is called."""
     scripts = PYPROJECT["project"]["scripts"]
     assert scripts == {"reprocheck": "reprocheck.cli:main"}
+
+
+def test_the_three_names_are_deliberately_different() -> None:
+    """Index name, command and importable package are three separate things.
+
+    The distribution had to be renamed to ``reprocheck-cli`` because the PyPI
+    refuses ``reprocheck`` for similarity with an unrelated project. The brand
+    and the command did not move, and this test is here so a future rename does
+    not quietly drag them along.
+    """
+    from reprocheck import DISTRIBUTION_NAME
+
+    assert DISTRIBUTION_NAME == "reprocheck-cli"
+    assert PYPROJECT["project"]["name"] == "reprocheck-cli"
+    # The command did not change.
+    assert set(PYPROJECT["project"]["scripts"]) == {"reprocheck"}
+    # The importable package did not change.
+    assert (ROOT / "src" / "reprocheck" / "__init__.py").is_file()
+    assert sys.modules["reprocheck"].__name__ == "reprocheck"
+    # The brand did not change.
+    assert (
+        "ReproCheck" in PYPROJECT["project"]["description"]
+        or "reproducibility" in (PYPROJECT["project"]["description"])
+    )
+    assert f"pip install {DISTRIBUTION_NAME}" in (ROOT / "README.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_installed_metadata_is_read_under_the_index_name() -> None:
+    """`--version` must not look for a distribution that was renamed."""
+    from reprocheck import DISTRIBUTION_NAME, package_version
+
+    assert DISTRIBUTION_NAME == PYPROJECT["project"]["name"]
+    if not _installed():
+        pytest.skip(f"{DISTRIBUTION} is not installed in this environment")
+    assert package_version() == metadata.version(DISTRIBUTION)
 
 
 def test_module_entry_point_resolves_to_the_same_function() -> None:
@@ -291,6 +329,31 @@ def test_release_workflow_checks_the_tag_against_the_package_version() -> None:
     assert "--audit-only" in RELEASE
 
 
+def test_release_workflow_looks_for_the_artifact_name_setuptools_writes() -> None:
+    """The filename is not the metadata name, and the check has to know it.
+
+    The first version looked for ``dist/reprocheck-<version>-...whl``, which
+    never exists: setuptools normalises the hyphen to an underscore, so the file
+    is ``reprocheck_cli-<version>-...whl``. The release would have failed at the
+    version gate for a reason that had nothing to do with the version.
+    """
+    assert 'wheel="dist/reprocheck_cli-${package_version}-py3-none-any.whl"' in RELEASE
+    assert 'sdist="dist/reprocheck_cli-${package_version}.tar.gz"' in RELEASE
+    assert "reprocheck-$package_version" not in RELEASE
+
+
+@pytest.mark.skipif(not (ROOT / "dist").is_dir(), reason="dist/ does not exist")
+def test_the_artifacts_on_disk_are_the_ones_the_workflow_looks_for() -> None:
+    """Same check, run against what a real build produced."""
+    from reprocheck import DISTRIBUTION_NAME
+
+    dist = ROOT / "dist"
+    normalised = DISTRIBUTION_NAME.replace("-", "_")
+    for suffix in ("-py3-none-any.whl", ".tar.gz"):
+        expected = dist / f"{normalised}-{__version__}{suffix}"
+        assert expected.is_file(), f"the release workflow expects {expected.name}"
+
+
 def test_release_workflow_uses_oidc_and_nothing_else() -> None:
     publish = RELEASE.split("publish:", 1)[1]
     assert "id-token: write" in publish
@@ -365,7 +428,7 @@ def test_project_metadata_and_package_agree_on_the_version() -> None:
     from reprocheck import __version__ as imported
 
     assert imported == __version__
-    assert __version__ == "0.11.0b2"
+    assert __version__ == "0.11.0b3"
 
 
 def test_changelog_records_the_trusted_publishing_release() -> None:
@@ -373,6 +436,15 @@ def test_changelog_records_the_trusted_publishing_release() -> None:
     assert f"## [{__version__}]" in changelog
     assert "Trusted Publishing" in changelog
     assert "## [0.11.0b1]" in changelog, "the first beta stays in the history"
+
+
+def test_changelog_records_the_rename_and_keeps_the_brand() -> None:
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "## [0.11.0b3]" in changelog
+    assert "reprocheck-cli" in changelog
+    # The rename must not read as a rename of the product.
+    assert "ReproCheck" in changelog
+    assert "## [0.11.0b2]" in changelog, "the prepared-but-unpublished version stays"
 
 
 def test_self_scan_finds_no_mutable_reference_in_the_release_workflow() -> None:
@@ -440,9 +512,16 @@ def test_wheel_and_sdist_are_present_and_named_after_the_version() -> None:
     wheels = sorted(DIST.glob("*.whl"))
     sdists = sorted(DIST.glob("*.tar.gz"))
     assert wheels and sdists
+    # setuptools normalises a hyphen to an underscore in the artifact filename
+    # (PEP 427), so the file is reprocheck_cli-... while the metadata Name is
+    # reprocheck-cli. Both spellings have to be accepted here, or the rename
+    # looks like a broken build.
+    normalised = DISTRIBUTION.replace("-", "_")
     for path in wheels + sdists:
         assert __version__ in path.name, path.name
-        assert DISTRIBUTION in path.name
+        assert DISTRIBUTION in path.name or normalised in path.name, path.name
+    assert wheels[0].name == f"{normalised}-{__version__}-py3-none-any.whl"
+    assert sdists[0].name == f"{normalised}-{__version__}.tar.gz"
 
 
 @pytest.mark.skipif(not DIST.is_dir(), reason="dist/ does not exist")

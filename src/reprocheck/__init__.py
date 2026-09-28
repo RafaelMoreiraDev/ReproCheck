@@ -10,9 +10,15 @@ from __future__ import annotations
 
 from importlib import metadata
 
-__version__ = "0.11.0b2"
+__version__ = "0.11.0b3"
 
-__all__ = ["__version__", "package_version"]
+#: The distribution name on the index. It is not the importable package, which
+#: is ``reprocheck``, and not the command, which is ``reprocheck``. It is
+#: ``reprocheck-cli`` only because the PyPI refuses ``reprocheck`` for
+#: similarity with an unrelated project that owns ``repro-check``.
+DISTRIBUTION_NAME = "reprocheck-cli"
+
+__all__ = ["DISTRIBUTION_NAME", "__version__", "package_version"]
 
 
 def package_version() -> str:
@@ -24,6 +30,6 @@ def package_version() -> str:
     falls back to :data:`__version__`, which is the value the build reads.
     """
     try:
-        return metadata.version("reprocheck")
+        return metadata.version(DISTRIBUTION_NAME)
     except metadata.PackageNotFoundError:
         return __version__
