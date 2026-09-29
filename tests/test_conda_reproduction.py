@@ -83,9 +83,17 @@ PYTEST_SOURCE = json.loads(os.environ.get("FAKE_PYTEST_SOURCE", "{}"))
 
 
 def site_packages(prefix):
+    """Where a package goes in a prefix, per platform.
+
+    The POSIX layout carries the interpreter version: ``lib/python3.11/
+    site-packages``, not ``lib/python3/``. Writing to the wrong one produces a
+    prefix that looks populated to the fixture and is empty to the interpreter,
+    which is how an import test comes to assert that nothing was imported.
+    """
     if os.name == "nt":
         return Path(prefix) / "Lib" / "site-packages"
-    return Path(prefix) / "lib" / "python3" / "site-packages"
+    version = f"python{sys.version_info[0]}.{sys.version_info[1]}"
+    return Path(prefix) / "lib" / version / "site-packages"
 
 
 def install_interpreter(prefix):
@@ -358,10 +366,16 @@ def manager(tmp_path: Path):
 
 @pytest.fixture
 def on_path(monkeypatch):
-    """Put a fake manager directory first on ``PATH`` and nothing else."""
+    """Make ``PATH`` be exactly one directory, so discovery sees only that.
+
+    Replacing rather than prepending is the point. GitHub's Linux runners ship
+    with miniconda installed, so a test that only adds its own directory would
+    silently find the real ``conda`` and pass for the wrong reason on CI while
+    passing for the right one on a machine without it.
+    """
 
     def apply(directory: Path) -> None:
-        monkeypatch.setenv("PATH", str(directory) + os.pathsep + os.environ["PATH"])
+        monkeypatch.setenv("PATH", str(directory))
 
     return apply
 
