@@ -281,16 +281,159 @@ def test_packages_are_discovered_under_src() -> None:
     } <= packages
 
 
+def _uses(workflow: str) -> dict[str, tuple[str, str]]:
+    """Return ``{action: (sha, human tag)}`` for one workflow's ``uses:`` lines.
+
+    A line the parser does not understand raises, on purpose: a pin that stops
+    looking like ``owner/action@sha # vX.Y.Z`` should fail the suite, not be
+    skipped over.
+    """
+    import re
+
+    pattern = re.compile(
+        r"uses:\s*([\w.-]+/[\w.-]+)@([0-9a-f]{40})\s*#\s*(v[\w.\-+]+)\s*$"
+    )
+    found: dict[str, tuple[str, str]] = {}
+    for line in workflow.splitlines():
+        if "uses:" not in line:
+            continue
+        match = pattern.match(line.strip())
+        assert match, f"unpinned or uncommented action reference: {line.strip()!r}"
+        found[match.group(1)] = (match.group(2), match.group(3))
+    return found
+
+
+#: Every action the workflows use, with the release that must be pinned.
+#:
+#: The runtime column is not decoration: GitHub deprecated the Node 20 runtime
+#: these actions used to declare, the runners now force them onto Node 24 and
+#: print a warning on every run. The values were read from each action's
+#: ``action.yml`` at the pinned commit, not from the release notes' prose.
+EXPECTED_ACTIONS = {
+    "actions/checkout": (
+        "08c6903cd8c0fde910a37f88322edcfb5dd907a8",
+        "v5.0.0",
+        "node24",
+    ),
+    "actions/setup-python": (
+        "e797f83bcb11b83ae66e0230d6156d7c80228e7c",
+        "v6.0.0",
+        "node24",
+    ),
+    "actions/upload-artifact": (
+        "b7c566a772e6b6bfb58ed0dc250532a479d7789f",
+        "v6.0.0",
+        "node24",
+    ),
+    "actions/download-artifact": (
+        "37930b1c2abaa49bbe596cd826c3c89aef350131",
+        "v7.0.0",
+        "node24",
+    ),
+    # A composite action: it declares no Node runtime at all, which is why it
+    # never appeared in the deprecation warning. Left alone on purpose.
+    "pypa/gh-action-pypi-publish": (
+        "dc37677b2e1c63e2034f94d8a5b11f265b73ba33",
+        "v1.14.2",
+        "composite",
+    ),
+}
+
+#: The pins that were in place while the Node 20 warning was firing. Kept so a
+#: regression to any of them is reported by name instead of by SHA.
+NODE20_PINS = {
+    "actions/checkout": "11bd71901bbe5b1630ceea73d27597364c9af683",
+    "actions/setup-python": "a26af69be951a213d495a4c3e4e4022e16d87065",
+    "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+    "actions/download-artifact": "d3f86a106a0bac45b974a628896c90dbdf5c8093",
+}
+
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+CI = CI_WORKFLOW.read_text(encoding="utf-8")
+RELEASE = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _all_uses() -> list[tuple[str, str, str]]:
+    """Return ``(action, sha, tag)`` for every ``uses:`` in every workflow.
+
+    Workflow by workflow on purpose. Merging the two into one dictionary lets
+    the last workflow overwrite the first, which is exactly how a pin that only
+    regressed in one file would slip through unnoticed.
+    """
+    rows: list[tuple[str, str, str]] = []
+    for workflow in (CI, RELEASE):
+        for action, (sha, tag) in _uses(workflow).items():
+            rows.append((action, sha, tag))
+    return rows
+
+
 def test_workflow_actions_are_pinned_to_a_commit_sha() -> None:
     """The project applies the rule it reports as RC220."""
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    uses = [line for line in workflow.splitlines() if "uses:" in line]
-    assert uses, "the workflow should use at least one action"
-    for line in uses:
-        reference = line.split("uses:", 1)[1].split("#")[0].strip()
-        _, _, sha = reference.partition("@")
-        assert len(sha) == 40 and all(c in "0123456789abcdef" for c in sha), reference
-        assert "# v" in line, "the human tag must stay next to the pin"
+    for name, workflow in (("ci.yml", CI), ("release.yml", RELEASE)):
+        uses = _uses(workflow)
+        assert uses, f"{name} should use at least one action"
+        for action, (sha, tag) in uses.items():
+            assert len(sha) == 40 and all(c in "0123456789abcdef" for c in sha), (
+                f"{name}: {action}"
+            )
+            assert tag.startswith("v"), f"{name}: {action} has no human tag"
+
+
+def test_every_action_is_at_the_release_we_verified() -> None:
+    """A pin that drifts is how a Node 20 action comes back unnoticed."""
+    rows = _all_uses()
+    seen = {action for action, _sha, _tag in rows}
+    assert seen == set(EXPECTED_ACTIONS), sorted(seen ^ set(EXPECTED_ACTIONS))
+    for action, sha, tag in rows:
+        assert (sha, tag) == EXPECTED_ACTIONS[action][:2], (
+            f"{action} is pinned to {sha} {tag}, "
+            f"expected {EXPECTED_ACTIONS[action][0]} {EXPECTED_ACTIONS[action][1]}"
+        )
+
+
+def test_no_known_node20_action_survived() -> None:
+    """The whole point of the maintenance: no action left on the old runtime.
+
+    Checked per ``uses:`` line rather than per unique action, because a single
+    workflow can reference the same action twice and only one of the two
+    references can be stale.
+    """
+    for action, sha, _tag in _all_uses():
+        assert action in EXPECTED_ACTIONS, f"unaudited action {action}"
+        stale = NODE20_PINS.get(action)
+        if stale is not None:
+            assert sha != stale, (
+                f"{action} is back on the Node 20 pin {stale}; "
+                f"the expected release is {EXPECTED_ACTIONS[action][1]}"
+            )
+    for action, (_sha, tag, runtime) in EXPECTED_ACTIONS.items():
+        if runtime == "composite":
+            continue
+        assert runtime == "node24", f"{action} {tag} was not audited as node24"
+
+
+def test_shared_actions_have_one_pin_across_both_workflows() -> None:
+    """Two versions of one action in two workflows is exactly RC221."""
+    ci_uses = _uses(CI)
+    release_uses = _uses(RELEASE)
+    shared = set(ci_uses) & set(release_uses)
+    assert {"actions/checkout", "actions/setup-python"} <= shared, sorted(shared)
+    for action in shared:
+        assert ci_uses[action] == release_uses[action], (
+            f"{action}: ci.yml has {ci_uses[action]} and release.yml has "
+            f"{release_uses[action]}"
+        )
+
+
+def test_the_artifact_pair_moved_together() -> None:
+    """A v4 upload with a new download silently loses the artifacts."""
+    upload = _uses(RELEASE)["actions/upload-artifact"][1]
+    download = _uses(RELEASE)["actions/download-artifact"][1]
+    assert upload == "v6.0.0" and download == "v7.0.0", (upload, download)
+    # Both are the same v4+ artifact backend, which is why the majors differ.
+    assert int(upload.split(".")[0][1:]) >= 4
+    assert int(download.split(".")[0][1:]) >= 4
 
 
 def test_workflow_matrix_matches_the_declared_support() -> None:
@@ -302,9 +445,6 @@ def test_workflow_matrix_matches_the_declared_support() -> None:
 # --------------------------------------------------------------------------- #
 # 7. the release workflow: trusted publishing, no secret
 # --------------------------------------------------------------------------- #
-
-RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
-RELEASE = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
 
 def test_release_workflow_exists() -> None:
