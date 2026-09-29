@@ -280,10 +280,85 @@ class FingerprintResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class CondaReproduction:
+    """Everything one Conda attempt observed.
+
+    ``strategy`` is the field that matters most. A pip attempt and a Conda
+    attempt answer different questions and their results are never merged, so
+    a report always says which one produced it.
+    """
+
+    #: ``pip`` or ``conda``. Empty when no reproduction was attempted.
+    strategy: str = ""
+    attempted: bool = False
+    manager: str | None = None
+    manager_version: str | None = None
+    manager_executable: str | None = None
+    environment_file: str | None = None
+    prefix: str | None = None
+    success: bool = False
+    exit_code: int | None = None
+    duration_seconds: float | None = None
+    network_enabled: bool = False
+    error: str | None = None
+    reason: str | None = None
+    #: Every candidate that was looked for, manager by manager.
+    discovery: tuple[str, ...] = ()
+    python_path: str | None = None
+    python_version: str | None = None
+    #: The Python spec the environment file declared, for comparison.
+    declared_python: str | None = None
+    package_count: int = 0
+    pip_package_count: int = 0
+    packages: tuple[dict[str, str], ...] = ()
+    #: True when a list output could only be partially parsed.
+    package_list_partial: bool = False
+    command: tuple[str, ...] = ()
+    cwd: str | None = None
+    stdout_path: str | None = None
+    stderr_path: str | None = None
+    stdout_snippet: str = ""
+    stderr_snippet: str = ""
+    pip_check: PipCheckResult = field(default_factory=PipCheckResult)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "strategy": self.strategy,
+            "attempted": self.attempted,
+            "manager": self.manager,
+            "manager_version": self.manager_version,
+            "manager_executable": self.manager_executable,
+            "environment_file": self.environment_file,
+            "prefix": self.prefix,
+            "success": self.success,
+            "exit_code": self.exit_code,
+            "duration_seconds": self.duration_seconds,
+            "network_enabled": self.network_enabled,
+            "error": self.error,
+            "reason": self.reason,
+            "discovery": list(self.discovery),
+            "python": {
+                "path": self.python_path,
+                "version": self.python_version,
+                "declared": self.declared_python,
+            },
+            "package_count": self.package_count,
+            "pip_package_count": self.pip_package_count,
+            "packages": [dict(item) for item in self.packages],
+            "package_list_partial": self.package_list_partial,
+            "command": list(self.command),
+            "cwd": self.cwd,
+            "stdout_path": self.stdout_path,
+            "stderr_path": self.stderr_path,
+            "stdout_snippet": self.stdout_snippet,
+            "stderr_snippet": self.stderr_snippet,
+            "pip_check": self.pip_check.to_dict(),
+        }
+
+
 @dataclass(slots=True)
 class ReproductionReport:
-    """Everything one ``reprocheck reproduce`` run observed."""
-
     attempted: bool = True
     workspace: str | None = None
     workspace_kept: bool = False
@@ -303,6 +378,8 @@ class ReproductionReport:
     test_collection: TestCollection = field(default_factory=TestCollection)
     integrity: FingerprintResult = field(default_factory=FingerprintResult)
     completed_steps: tuple[str, ...] = ()
+    #: Present when `--conda` was requested. A pip attempt leaves it empty.
+    conda: CondaReproduction | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -329,4 +406,6 @@ class ReproductionReport:
             "original_project_unchanged": self.integrity.unchanged,
             "integrity": self.integrity.to_dict(),
             "completed_steps": list(self.completed_steps),
+            "strategy": self.conda.strategy if self.conda else "pip",
+            "conda": self.conda.to_dict() if self.conda else None,
         }

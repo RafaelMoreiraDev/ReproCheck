@@ -312,6 +312,15 @@ def normalise_reproduction(report: dict) -> dict[str, dict[str, str]]:
         }
 
     add("attempted", "a reproduction was attempted", "yes")
+    # The strategy is compared first and on its own. A pip report and a Conda
+    # report answer different questions, and merging their results would make a
+    # strategy change look like a change of versions.
+    add(
+        "strategy",
+        "reproduction strategy",
+        normalise_text(reproduction.get("strategy")) or "pip",
+        value=normalise_text(reproduction.get("strategy")) or "pip",
+    )
     add(
         "network_enabled",
         "network allowed for the installation",
@@ -332,10 +341,44 @@ def normalise_reproduction(report: dict) -> dict[str, dict[str, str]]:
 
     installation = reproduction.get("installation")
     if installation:
-        strategy = normalise_text(installation.get("strategy"))
-        add("installation.strategy", "installation strategy", strategy, value=strategy)
         success = _bool(installation.get("success"))
         add("installation.success", "installation completed", success, value=success)
+
+    conda = reproduction.get("conda")
+    if conda:
+        manager = normalise_text(conda.get("manager"))
+        if manager:
+            add("conda.manager", "Conda manager", manager, value=manager)
+        environment_file = normalise_text(conda.get("environment_file"))
+        if environment_file:
+            add(
+                "conda.environment_file",
+                "Conda environment file",
+                environment_file,
+                value=environment_file,
+            )
+        success = _bool(conda.get("success"))
+        add("conda.success", "Conda environment created", success, value=success)
+        version = normalise_text((conda.get("python") or {}).get("version"))
+        if version:
+            add("conda.python.version", "environment Python", version, value=version)
+        packages = normalise_text(conda.get("package_count"))
+        if packages:
+            add(
+                "conda.package_count",
+                "packages in the environment",
+                packages,
+                value=packages,
+            )
+        conda_pip = conda.get("pip_check") or {}
+        if conda_pip.get("ran"):
+            clean = _bool(conda_pip.get("clean"))
+            add(
+                "conda.pip_check.clean",
+                "pip check in the environment",
+                clean,
+                value=clean,
+            )
 
     pip_check = reproduction.get("pip_check") or {}
     if pip_check.get("ran"):

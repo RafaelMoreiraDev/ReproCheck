@@ -9,8 +9,9 @@ repositories and can run their build code has a real threat model, and that
 model is the opposite of the usual one: **the projects you point ReproCheck at
 are the untrusted input, not ReproCheck itself.**
 
-The distribution has one runtime dependency, `packaging`. It makes no network
-requests during `scan`, `suggest`, `baseline` and `fix`, and it sends nothing
+The distribution has one runtime dependency, `packaging`, plus `PyYAML`, used to
+read Conda environment files with `safe_load`. Neither makes any network request
+during `scan`, `suggest`, `baseline` and `fix`, and neither sends anything
 anywhere. Reports are written to files you name, plus a state directory under the
 user's own application data.
 
@@ -21,7 +22,15 @@ Two commands run code that belongs to the analysed project:
 | Behaviour | Command | What runs |
 | --- | --- | --- |
 | Environment reproduction | `reprocheck reproduce` | The project's declared build backend (`setup.py`, `pyproject.toml` build requirements, `uv`, `pip`), which executes that project's own build scripts. |
+| Conda reproduction | `reprocheck reproduce --conda --network` | A third-party **solver**, which resolves packages from channels and runs their install scripts. Any `pip:` subsection in the environment file runs a build backend too. |
 | Runtime checks | `reprocheck scan --runtime-checks` | Imports the project's modules and runs pytest collection, executing their module-level code and import-time side effects. |
+
+A Conda environment is not a sandbox either, and a solver is more capable than a
+virtual environment: it downloads and executes packages on your behalf, from
+channels you may not control, to satisfy a file you are auditing. That is why
+`--conda` is opt-in, why `--network` is required on top of it, and why ReproCheck
+**never installs a Conda manager** to make the feature work. If you do not have
+`conda`, `mamba` or `micromamba` installed, the attempt stops and says so.
 
 Everything else — `scan` without `--runtime-checks`, `suggest`, `baseline save`,
 `baseline compare` — reads files and text. It does not import, execute or install

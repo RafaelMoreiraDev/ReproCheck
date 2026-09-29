@@ -12,6 +12,7 @@ what is not, and why a virtual environment is not a security boundary.
 | Virtual environment | Created at `<workspace>/venv`, outside the project, never at `.venv` inside it |
 | Git | The copy excludes `.git`, so no `checkout`, `reset`, `clean`, hook or commit can run. Git is only queried read-only for the fingerprint |
 | Lockfiles and configuration | Written only inside the workspace copy, if the project's own build writes them |
+| Conda environment | Created at `<workspace>/conda-env`, outside the project, never at `./env` inside it. Only with `--conda` |
 | Logs and report | Live under `<workspace>/logs` and the report destination chosen by the user |
 | Integrity | Size and mtime of every file, plus `git rev-parse HEAD` and `git status --porcelain`, are captured before and after. Any difference is reported as **RC406**, an error severity finding about ReproCheck itself |
 | README | Never executed. It stays evidence, never code |
@@ -30,6 +31,27 @@ source is worse than one that fails.
 `reprocheck reproduce` runs, in this order: the analysis (read-only), then the
 installation. With `--runtime-checks` it runs two more steps, and both execute
 project code:
+
+### Conda environment creation (`--conda` only)
+
+`conda env create --prefix <workspace>/conda-env --file environment.yml` runs a
+third-party **solver**, and a solver that resolves a package from a channel will
+download it, unpack it and run its install scripts. This is the single most
+consequential step in the whole product, and it is why `--conda` is opt-in, why
+`--network` is required on top of it, and why no manager is ever installed to
+make it work.
+
+Three further points apply only to the Conda path:
+
+- A **`pip:` subsection inside the environment file** runs a PEP 517 build
+  backend for every source distribution it names, as a side effect of the solve.
+- **`--runtime-checks` imports the project's code from inside the environment**,
+  which is a different set of installed packages from the venv the pip path
+  would have used, and therefore a different set of import-time side effects.
+- The environment runs with **`PYTHONPATH` cleared and `PYTHONNOUSERSITE` set**,
+  so it cannot import from the host. That is a correctness requirement rather
+  than a hardening measure: a prefix that can see the host's packages is not the
+  environment its file describes.
 
 ### Installation
 

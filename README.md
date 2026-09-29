@@ -113,10 +113,12 @@ This is part of the product, not a footnote.
 - Not a container manager, and not an experiment tracker.
 - Not a universal dependency solver: it does not choose versions, and it never
   picks one for you.
-- Not a Conda tool. It **inspects** Conda environment declarations; it does not
-  reproduce them. `scan` never runs conda, never contacts a channel, never
-  solves an environment and never writes a lockfile, so a project that uses
-  Conda is checked for contradictions, not for reproducibility.
+- Not a Conda tool by default. `scan` **inspects** Conda environment
+  declarations; it never runs conda, contacts a channel, solves anything or
+  writes a lockfile. Reproducing a Conda environment is a separate, opt-in
+  step (`reproduce --conda --network`), and it runs a third-party solver that
+  downloads and executes packages. A project that uses Conda is checked for
+  contradictions by default, and for reproducibility only when asked.
 - Not proof that a scientific study is reproducible.
 
 A `PASS` verdict means only that **the checks which ran succeeded**. Everything
@@ -1068,6 +1070,66 @@ a channel is a decision ReproCheck will not make for you.
 The environment is read, not reproduced. When a project declares one, the report
 lists it under **Not verified**: no conda process was run, no channel was
 contacted and no environment was solved.
+
+### Conda reproduction (V0.12)
+
+`reproduce` uses pip. It can be asked to build the project's Conda environment
+instead, and the choice is never made for you:
+
+```powershell
+# what the static scan already reads
+reprocheck scan .
+
+# refuse without network permission
+reprocheck reproduce . --conda
+
+# create the environment from environment.yml
+reprocheck reproduce . --conda --network
+
+# a project with more than one environment file
+reprocheck reproduce . --conda --network --conda-env environment-dev.yml
+
+# pin the manager, and add the runtime checks
+reprocheck reproduce . --conda --network --conda-manager micromamba --runtime-checks
+```
+
+Without `--conda` nothing changes: the pipeline is the pip one it has always
+been. The two strategies are never merged, and every report says which one
+produced it, so a baseline comparison shows a strategy change as a strategy
+change rather than as a change of versions.
+
+Three managers are supported, discovered in the order **micromamba, mamba,
+conda**, and the report records which one ran and which were considered. **No
+manager is ever installed.** If none is found the attempt stops with RC600 and
+names all three; downloading a package manager would be a larger action than the
+reproduction, and it would not be visible in the report.
+
+`--network` is required. Conda resolves packages from channels by default, and
+ReproCheck does not assume an offline solve is possible or safe. The environment
+is created **inside the temporary workspace**, never inside or beside the
+analysed project, and the original project is never written to.
+
+> **A Conda environment is not a security boundary.** Creating one runs a
+> third-party solver that downloads and executes packages; a `pip:` subsection
+> inside the file runs a build backend; `--runtime-checks` imports the project's
+> code. A virtual environment, Conda or otherwise, changes which packages are
+> installed and nothing about authority. For code you do not trust, use a
+> container or a VM. See [SECURITY.md](https://github.com/RafaelMoreiraDev/ReproCheck/blob/main/SECURITY.md).
+
+| ID | Severity | Confidence | Rule |
+| --- | --- | --- | --- |
+| RC600 | error | high | No supported Conda-compatible manager is available |
+| RC601 | error | high | Several environment files were found, or none, and nothing was chosen |
+| RC602 | error | high | The environment could not be created |
+| RC603 | error | high | The environment's own Python does not match what the file declares |
+| RC604 | info | high | A Conda reproduction was requested without network permission |
+
+A Conda attempt that creates the environment and finds it clean is `PARTIAL`,
+never `PASS` on its own: the full test suite, external datasets and remote
+services stay under **Not verified** exactly as they do for a pip run.
+
+**No Conda finding is ever patched.** Choosing a Python version, a constraint, a
+channel, or which of two installers wins is a decision ReproCheck will not make.
 
 ## Reproduce: a controlled installation attempt
 

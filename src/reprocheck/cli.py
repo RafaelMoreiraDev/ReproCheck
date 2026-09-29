@@ -149,6 +149,33 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     reproduce_parser.add_argument(
+        "--conda",
+        action="store_true",
+        help=(
+            "reproduce the Conda environment instead of using pip; off by "
+            "default, because a Conda environment is created by running a "
+            "third-party package manager that downloads and executes packages"
+        ),
+    )
+    reproduce_parser.add_argument(
+        "--conda-env",
+        metavar="<file>",
+        default=None,
+        help=(
+            "which environment file to reproduce with --conda; required when "
+            "the project declares more than one"
+        ),
+    )
+    reproduce_parser.add_argument(
+        "--conda-manager",
+        metavar="<name>",
+        default=None,
+        help=(
+            "use this Conda-compatible manager instead of discovering one "
+            "(conda, mamba or micromamba)"
+        ),
+    )
+    reproduce_parser.add_argument(
         "--verbose",
         action="store_true",
         help="print the reproduction steps and log locations",
@@ -360,12 +387,27 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_reproduce(args: argparse.Namespace) -> int:
+    if getattr(args, "conda_env", None) and not getattr(args, "conda", False):
+        print(
+            "reprocheck: error: --conda-env has no effect without --conda",
+            file=sys.stderr,
+        )
+        return EXIT_OPERATIONAL
+    if getattr(args, "conda_manager", None) and not getattr(args, "conda", False):
+        print(
+            "reprocheck: error: --conda-manager has no effect without --conda",
+            file=sys.stderr,
+        )
+        return EXIT_OPERATIONAL
     try:
         report = reproduce(
             args.path,
             network=args.network,
             keep_workspace=args.keep_workspace,
             runtime_checks=args.runtime_checks,
+            conda=getattr(args, "conda", False),
+            conda_env=getattr(args, "conda_env", None),
+            conda_manager=getattr(args, "conda_manager", None),
         )
     except (ScanError, ReproductionError) as exc:
         print(f"reprocheck: error: {exc}", file=sys.stderr)

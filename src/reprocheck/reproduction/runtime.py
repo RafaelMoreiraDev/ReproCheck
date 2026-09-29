@@ -126,12 +126,26 @@ print(json.dumps({"available": importlib.util.find_spec("pytest") is not None}))
 _COLLECTED_RE = re.compile(r"(\d+)\s+tests? collected", re.IGNORECASE)
 
 
+def interpreter(workspace: Workspace, python: str | None = None) -> str:
+    """The interpreter a step should run.
+
+    Defaults to the workspace venv. A Conda attempt passes the environment's own
+    interpreter instead, so every step below works unchanged for both strategies
+    rather than growing a parallel code path.
+    """
+    return python or venv_python(workspace)
+
+
 def read_installed_version(
-    workspace: Workspace, name: str, env: dict[str, str]
+    workspace: Workspace,
+    name: str,
+    env: dict[str, str],
+    *,
+    python: str | None = None,
 ) -> InstalledDistribution:
     """Read ``importlib.metadata.version(name)`` from the reproduced venv."""
     result = run_command(
-        [venv_python(workspace), "-c", _VERSION_SCRIPT, name],
+        [interpreter(workspace, python), "-c", _VERSION_SCRIPT, name],
         cwd=workspace.source,
         logs=workspace.logs,
         name="installed-version",
@@ -160,7 +174,11 @@ def read_installed_version(
 
 
 def discover_import_targets(
-    workspace: Workspace, name: str, env: dict[str, str]
+    workspace: Workspace,
+    name: str,
+    env: dict[str, str],
+    *,
+    python: str | None = None,
 ) -> tuple[tuple[str, ...], str | None]:
     """Discover the top-level modules of the installed distribution.
 
@@ -169,7 +187,7 @@ def discover_import_targets(
     if not name:
         return ((), "no distribution name is declared")
     result = run_command(
-        [venv_python(workspace), "-c", _DISCOVERY_SCRIPT, name],
+        [interpreter(workspace, python), "-c", _DISCOVERY_SCRIPT, name],
         cwd=workspace.source,
         logs=workspace.logs,
         name="import-discovery",
@@ -194,13 +212,17 @@ def discover_import_targets(
 
 
 def run_import_checks(
-    workspace: Workspace, candidates: tuple[str, ...], env: dict[str, str]
+    workspace: Workspace,
+    candidates: tuple[str, ...],
+    env: dict[str, str],
+    *,
+    python: str | None = None,
 ) -> tuple[ImportCheck, ...]:
     """Import every candidate, one process each, with a short timeout."""
     checks: list[ImportCheck] = []
     for module in candidates:
         result = run_command(
-            [venv_python(workspace), "-c", f"import {module}"],
+            [interpreter(workspace, python), "-c", f"import {module}"],
             cwd=workspace.source,
             logs=workspace.logs,
             name=f"import-{module}",
@@ -223,13 +245,15 @@ def run_import_checks(
     return tuple(checks)
 
 
-def collect_tests(workspace: Workspace, env: dict[str, str]) -> TestCollection:
+def collect_tests(
+    workspace: Workspace, env: dict[str, str], *, python: str | None = None
+) -> TestCollection:
     """Run ``pytest --collect-only`` when pytest exists in the venv.
 
     Tests are never executed: only the collection step runs.
     """
     probe = run_command(
-        [venv_python(workspace), "-c", _PYTEST_PROBE_SCRIPT],
+        [interpreter(workspace, python), "-c", _PYTEST_PROBE_SCRIPT],
         cwd=workspace.source,
         logs=workspace.logs,
         name="pytest-probe",
@@ -245,7 +269,7 @@ def collect_tests(workspace: Workspace, env: dict[str, str]) -> TestCollection:
 
     result = run_command(
         [
-            venv_python(workspace),
+            interpreter(workspace, python),
             "-m",
             "pytest",
             "--collect-only",

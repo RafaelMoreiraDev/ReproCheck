@@ -152,6 +152,10 @@ def format_report(
     if report.reproduction:
         lines.append("")
         lines.extend(_reproduction_section(report, verbose=verbose))
+        conda_lines = _conda_reproduction_section(report)
+        if conda_lines:
+            lines.append("")
+            lines.extend(conda_lines)
     if report.verdict.not_verified:
         lines.append("")
         lines.append("Not verified (unknown, not failed):")
@@ -162,6 +166,48 @@ def format_report(
     if markdown:
         lines.append(f"  {markdown}")
     return "\n".join(lines)
+
+
+def _conda_reproduction_section(report: ScanReport) -> list[str]:
+    """The Conda block, printed when an attempt was made."""
+    conda = (report.reproduction or {}).get("conda")
+    if not conda:
+        return []
+    lines = [
+        "Conda reproduction",
+        f"  environment file: {conda.get('environment_file') or '-'}",
+        f"  manager: {conda.get('manager') or '-'} "
+        f"{conda.get('manager_version') or ''}".rstrip(),
+        f"  network: {'enabled' if conda.get('network_enabled') else 'disabled'}",
+        f"  created: {'yes' if conda.get('success') else 'no'}"
+        + (
+            f" (exit {conda.get('exit_code')})"
+            if conda.get("exit_code") is not None
+            else ""
+        ),
+    ]
+    if not conda.get("success"):
+        lines.append(f"  stopped: {conda.get('reason') or 'unknown'}")
+        if conda.get("error"):
+            lines.append(f"  detail: {conda['error']}")
+    else:
+        python = conda.get("python") or {}
+        lines.append(f"  python: {python.get('version') or 'unknown'}")
+        lines.append(
+            f"  packages: {conda.get('package_count', 0)}"
+            + (" (partial)" if conda.get("package_list_partial") else "")
+        )
+        pip = conda.get("pip_check") or {}
+        if pip.get("ran"):
+            lines.append(
+                "  pip check: "
+                + (
+                    "clean"
+                    if pip.get("clean")
+                    else f"{pip.get('conflict_count', 0)} conflict(s)"
+                )
+            )
+    return lines
 
 
 def _reproduction_section(report: ScanReport, *, verbose: bool) -> list[str]:

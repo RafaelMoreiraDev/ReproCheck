@@ -35,6 +35,7 @@ def render_markdown(report: ScanReport) -> str:
         _not_verified(report),
         _environment(report),
         _reproduction(report),
+        _conda_reproduction(report),
         _ci(report),
         _dependencies(report),
         _conda(report),
@@ -391,6 +392,96 @@ def _conda_python(environment: dict) -> str | None:
             spec = item.get("raw_spec")
             return f"{item.get('raw')}" + (f"  ({spec})" if spec else "")
     return None
+
+
+def _conda_reproduction(report: ScanReport) -> str:
+    """The Conda attempt, when one was made.
+
+    Present only with ``--conda``. The package list is a count, not a dump: a
+    solved environment has thousands of entries and printing them would bury
+    the three facts that matter.
+    """
+    conda = (report.reproduction or {}).get("conda")
+    if not conda:
+        return ""
+    lines = [
+        "## Conda reproduction",
+        "",
+        "A Conda environment is created by running a third-party package "
+        "manager, which downloads and executes packages. **It is not a "
+        "security boundary**: run it in a container or a VM for code you do "
+        "not trust.",
+        "",
+        f"- Strategy: {conda.get('strategy') or '-'}",
+        f"- Environment file: {conda.get('environment_file') or '-'}",
+        f"- Manager: {conda.get('manager') or '-'} "
+        f"{conda.get('manager_version') or ''}".rstrip(),
+        f"- Prefix: {conda.get('prefix') or '-'}",
+        f"- Network: {'enabled' if conda.get('network_enabled') else 'disabled'}",
+        f"- Created: {'yes' if conda.get('success') else 'no'}"
+        + (
+            f" (exit code {conda.get('exit_code')})"
+            if conda.get("exit_code") is not None
+            else ""
+        ),
+    ]
+    if not conda.get("success"):
+        lines.append(f"- Stopped because: {conda.get('reason') or 'unknown'}")
+        if conda.get("error"):
+            lines.append(f"- Detail: {conda['error']}")
+        for item in conda.get("discovery") or []:
+            lines.append(f"- Looked for: {item}")
+        return "\n".join(lines)
+
+    python = conda.get("python") or {}
+    lines += [
+        f"- Python: {python.get('version') or 'unknown'}"
+        + (
+            f" (the file declares `{python['declared']}`)"
+            if python.get("declared")
+            else " (the file declares no Python)"
+        ),
+        f"- Packages: {conda.get('package_count', 0)}"
+        + (
+            " (lower bound: the list could only be read partially)"
+            if conda.get("package_list_partial")
+            else ""
+        ),
+        f"- pip in the environment: {'yes' if conda.get('pip_package_count') else 'no'}",
+    ]
+    pip = conda.get("pip_check") or {}
+    if pip.get("ran"):
+        state = (
+            "clean"
+            if pip.get("clean")
+            else f"{pip.get('conflict_count', 0)} conflict(s)"
+        )
+        lines.append(f"- pip check: {state}")
+        for conflict in (pip.get("conflicts") or [])[:5]:
+            lines.append(f"  - {conflict}")
+    else:
+        lines.append("- pip check: not applicable, the file declares no pip subsection")
+
+    runtime = (report.reproduction or {}).get("runtime_checks") or {}
+    if runtime.get("enabled"):
+        imports = runtime.get("imports") or []
+        failed = [item for item in imports if not item.get("imported")]
+        collection = runtime.get("pytest_collection") or {}
+        lines.append(
+            f"- Runtime checks: {len(imports) - len(failed)}/{len(imports)} "
+            "module(s) imported"
+        )
+        lines.append(
+            "- Test collection: "
+            + (
+                "ran"
+                if collection.get("ran")
+                else "pytest not installed in the environment, skipped"
+            )
+        )
+    else:
+        lines.append("- Runtime checks: not requested, nothing was imported")
+    return "\n".join(lines)
 
 
 def _files(report: ScanReport) -> str:

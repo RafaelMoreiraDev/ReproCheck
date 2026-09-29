@@ -8,6 +8,13 @@ because the network was disabled is reported as such, not as a broken project.
 from __future__ import annotations
 
 from reprocheck.models import Confidence, Finding, Severity
+from reprocheck.reproduction.conda import (
+    STOP_AMBIGUOUS_ENVIRONMENT,
+    STOP_NO_ENVIRONMENT_FILE,
+    STOP_NO_MANAGER,
+    STOP_NO_NETWORK,
+    STOP_UNKNOWN_MANAGER,
+)
 from reprocheck.reproduction.installer import needs_network
 from reprocheck.reproduction.models import ReproductionReport, snippet
 
@@ -19,6 +26,11 @@ RC404_NETWORK_REQUIRED = "RC404"
 RC405_PYTHON_AMBIGUOUS = "RC405"
 RC406_ORIGINAL_MODIFIED = "RC406"
 RC407_VENV_FAILED = "RC407"
+RC600_CONDA_MANAGER_MISSING = "RC600"
+RC601_CONDA_AMBIGUOUS = "RC601"
+RC602_CONDA_CREATE_FAILED = "RC602"
+RC603_CONDA_PYTHON_MISMATCH = "RC603"
+RC604_CONDA_NETWORK_REQUIRED = "RC604"
 RC500_IMPORT_FAILED = "RC500"
 RC501_TEST_COLLECTION_FAILED = "RC501"
 RC502_IMPORT_TIMEOUT = "RC502"
@@ -40,6 +52,47 @@ def check_reproduction(
         *_import_findings(report),
         *_collection_findings(report),
         *_integrity_findings(report),
+        *_conda_findings(report),
+    ]
+
+
+def _python_findings(report: ReproductionReport) -> list[Finding]:
+    """Interpreter selection, which only the pip pipeline performs.
+
+    A Conda attempt never selects an interpreter: the environment file names the
+    Python and the manager provides it. Reporting "no deterministic version
+    could be chosen" for a Conda run would be a statement about a step that was
+    not part of it.
+    """
+    if report.conda is not None:
+        return []
+    selection = report.python
+    if selection.selected is not None:
+        return []
+    available = ", ".join(item.version for item in selection.candidates) or "none"
+    requirement = selection.requirement
+    missing = (
+        f"the project requires {requirement}"
+        if requirement
+        else "no deterministic version could be chosen"
+    )
+    return [
+        Finding(
+            id=RC402_PYTHON_NOT_INSTALLED if requirement else RC405_PYTHON_AMBIGUOUS,
+            title=(
+                "Required Python version is not installed locally"
+                if requirement
+                else "Python version could not be selected deterministically"
+            ),
+            severity=Severity.ERROR,
+            category=CATEGORY,
+            message=(
+                f"Reproduction was not attempted: {missing}. "
+                f"{selection.reason}. Interpreters found locally: {available}."
+            ),
+            evidence=selection.reason,
+            confidence=Confidence.HIGH,
+        )
     ]
 
 
@@ -111,37 +164,6 @@ def _collection_findings(report: ReproductionReport) -> list[Finding]:
                 f"log: {collection.stdout_path or collection.stderr_path} | "
                 f"{collection.stderr_snippet or collection.stdout_snippet}"
             ),
-            confidence=Confidence.HIGH,
-        )
-    ]
-
-
-def _python_findings(report: ReproductionReport) -> list[Finding]:
-    selection = report.python
-    if selection.selected is not None:
-        return []
-    available = ", ".join(item.version for item in selection.candidates) or "none"
-    requirement = selection.requirement
-    missing = (
-        f"the project requires {requirement}"
-        if requirement
-        else "no deterministic version could be chosen"
-    )
-    return [
-        Finding(
-            id=RC402_PYTHON_NOT_INSTALLED if requirement else RC405_PYTHON_AMBIGUOUS,
-            title=(
-                "Required Python version is not installed locally"
-                if requirement
-                else "Python version could not be selected deterministically"
-            ),
-            severity=Severity.ERROR,
-            category=CATEGORY,
-            message=(
-                f"Reproduction was not attempted: {missing}. "
-                f"{selection.reason}. Interpreters found locally: {available}."
-            ),
-            evidence=selection.reason,
             confidence=Confidence.HIGH,
         )
     ]
@@ -282,3 +304,188 @@ def _integrity_findings(report: ReproductionReport) -> list[Finding]:
             confidence=Confidence.HIGH,
         )
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Conda
+# --------------------------------------------------------------------------- #
+
+
+def _conda_findings(report: ReproductionReport) -> list[Finding]:
+    """Every finding produced by a Conda attempt.
+
+    The four refusal cases come first and are mutually exclusive: an attempt
+    that never created an environment cannot also have a wrong Python in it.
+    """
+    attempt = report.conda
+    if attempt is None or not attempt.attempted:
+        return []
+
+    if attempt.reason == STOP_NO_MANAGER:
+        checked = "; ".join(attempt.discovery) or "none"
+        return [
+            Finding(
+                id=RC600_CONDA_MANAGER_MISSING,
+                title="Conda-compatible environment manager is not available",
+                severity=Severity.ERROR,
+                category=CATEGORY,
+                message=(
+                    "A Conda reproduction was requested but no supported manager is "
+                    "installed. ReproCheck does not install one: downloading a "
+                    "package manager would be a larger action than the "
+                    f"reproduction, and it would not be visible in the report. "
+                    f"Checked: {checked}."
+                ),
+                evidence=attempt.error,
+                confidence=Confidence.HIGH,
+            )
+        ]
+
+    if attempt.reason in {STOP_AMBIGUOUS_ENVIRONMENT, STOP_NO_ENVIRONMENT_FILE}:
+        listing = ", ".join(attempt.discovery) or "none"
+        return [
+            Finding(
+                id=RC601_CONDA_AMBIGUOUS,
+                title=(
+                    "Multiple Conda environment files detected"
+                    if attempt.reason == STOP_AMBIGUOUS_ENVIRONMENT
+                    else "No Conda environment file was found"
+                ),
+                severity=Severity.ERROR,
+                category=CATEGORY,
+                message=(
+                    f"{attempt.error or ''} Nothing was run. Candidates: {listing}."
+                ).strip(),
+                evidence=attempt.error,
+                confidence=Confidence.HIGH,
+            )
+        ]
+
+    if attempt.reason == STOP_UNKNOWN_MANAGER:
+        return [
+            Finding(
+                id=RC600_CONDA_MANAGER_MISSING,
+                title="The requested Conda manager is not supported",
+                severity=Severity.ERROR,
+                category=CATEGORY,
+                message=str(attempt.error or ""),
+                evidence=attempt.error,
+                confidence=Confidence.HIGH,
+            )
+        ]
+
+    if attempt.reason == STOP_NO_NETWORK:
+        return [
+            Finding(
+                id=RC604_CONDA_NETWORK_REQUIRED,
+                title="Conda reproduction requires network permission",
+                severity=Severity.INFO,
+                category=CATEGORY,
+                message=(
+                    "A Conda environment was requested but the run did not have "
+                    "network permission, so no environment was created. Conda "
+                    "resolves packages from channels by default, and ReproCheck "
+                    "does not assume an offline solve is possible."
+                ),
+                evidence=attempt.error,
+                confidence=Confidence.HIGH,
+            )
+        ]
+
+    if not attempt.success:
+        return [
+            Finding(
+                id=RC602_CONDA_CREATE_FAILED,
+                title="The Conda environment could not be created",
+                severity=Severity.ERROR,
+                category=CATEGORY,
+                message=(
+                    f"{attempt.manager} could not create the environment from "
+                    f"{attempt.environment_file} (exit code {attempt.exit_code}): "
+                    f"{attempt.error or 'no output'}"
+                ),
+                evidence=(
+                    f"manager: {attempt.manager} {attempt.manager_version or ''} | "
+                    f"file: {attempt.environment_file} | prefix: {attempt.prefix} | "
+                    f"command: {' '.join(attempt.command) or '-'} | "
+                    f"log: {attempt.stderr_path or attempt.stdout_path or '-'}"
+                ),
+                confidence=Confidence.HIGH,
+            )
+        ]
+
+    mismatch = _python_mismatch(attempt)
+    if mismatch:
+        return [
+            Finding(
+                id=RC603_CONDA_PYTHON_MISMATCH,
+                title="The environment Python does not match what the file declares",
+                severity=Severity.ERROR,
+                category=CATEGORY,
+                message=(
+                    f"{attempt.environment_file} declares '{attempt.declared_python}' "
+                    f"but the created environment provides Python "
+                    f"{attempt.python_version}."
+                ),
+                evidence=(
+                    f"declared: {attempt.declared_python} | "
+                    f"installed: {attempt.python_version}"
+                ),
+                file=attempt.environment_file,
+                confidence=Confidence.HIGH,
+            )
+        ]
+
+    conflicts = attempt.pip_check
+    if conflicts.ran and conflicts.conflicts:
+        return [
+            Finding(
+                id=RC400_PIP_CHECK_CONFLICTS,
+                title="pip check found broken requirements in the Conda environment",
+                severity=Severity.ERROR,
+                category=CATEGORY,
+                message=(
+                    "The environment was created, but pip check reported "
+                    f"{conflicts.conflict_count} conflict(s) inside it: "
+                    + "; ".join(conflicts.conflicts[:5])
+                ),
+                evidence="; ".join(conflicts.conflicts),
+                file=attempt.environment_file,
+                confidence=Confidence.HIGH,
+            )
+        ]
+    return []
+
+
+def _python_mismatch(attempt) -> str | None:
+    """Return a mismatch description, or `None` when the pair is compatible.
+
+    The environment's own interpreter is the authority, and the declared spec
+    is only compared when it can be translated to PEP 440. A declaration the
+    project wrote in a form with no exact equivalent is reported as unknown
+    rather than as a mismatch.
+    """
+    if not attempt.python_version or not attempt.declared_python:
+        return None
+    from reprocheck.checks.conda import widen_wildcard_pin
+    from reprocheck.scanners.conda import conda_to_pep440
+
+    translated = conda_to_pep440(attempt.declared_python)
+    if translated is None:
+        return None
+    from packaging.version import InvalidVersion, Version
+
+    try:
+        version = Version(attempt.python_version)
+    except InvalidVersion:
+        return None
+    specifier = widen_wildcard_pin(translated)
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+
+    try:
+        allowed = SpecifierSet(specifier)
+    except InvalidSpecifier:
+        return None
+    if version in allowed:
+        return None
+    return attempt.declared_python

@@ -36,6 +36,10 @@ FAIL_FINDING_IDS = frozenset(
         "RC407",  # the virtual environment could not be created
         "RC500",  # an installed module failed to import
         "RC502",  # an import exceeded the timeout
+        "RC600",  # no Conda-compatible manager is available
+        "RC601",  # the Conda environment file is ambiguous or absent
+        "RC602",  # the Conda environment could not be created
+        "RC603",  # the environment Python does not match the declaration
     }
 )
 
@@ -48,6 +52,10 @@ _FAIL_REASONS = {
     "RC407": "the virtual environment could not be created",
     "RC500": "a module provided by the distribution failed to import",
     "RC502": "a module import exceeded the per-module timeout",
+    "RC600": "no Conda-compatible environment manager is available",
+    "RC601": "the Conda environment file is ambiguous or absent",
+    "RC602": "the Conda environment could not be created",
+    "RC603": "the environment Python does not match what the file declares",
 }
 
 #: True for every run, with the reason ReproCheck does not go further.
@@ -121,6 +129,52 @@ def all_findings(report: ScanReport) -> list[Finding]:
     )
 
 
+def _conda_partial_reasons(
+    reproduction: dict, conda: dict, reasons: list[str]
+) -> list[str]:
+    """What keeps a created Conda environment from being a PASS.
+
+    A Conda attempt has no pip installation step, so the pip rules do not apply
+    to it and are not borrowed. What replaces them is the evidence the Conda
+    path can actually produce: the environment exists, its Python matches the
+    declaration, and ``pip check`` is clean when the file asked for pip.
+    """
+    if not conda.get("success"):
+        reasons.append(
+            "the Conda environment was not created: "
+            + str(conda.get("error") or conda.get("reason") or "unknown reason")
+        )
+        return reasons
+
+    if not conda.get("python", {}).get("version"):
+        reasons.append(
+            "the environment's own Python could not be read, so the "
+            "declaration in the file was not verified against anything"
+        )
+    if conda.get("package_list_partial"):
+        reasons.append(
+            "the package list could only be read partially, so the package "
+            "count is a lower bound"
+        )
+
+    pip = conda.get("pip_check") or {}
+    if not pip.get("ran"):
+        reasons.append(
+            "the environment file declares no pip subsection, so no pip "
+            "metadata consistency check was possible"
+        )
+    elif not pip.get("clean"):
+        reasons.append("pip check reported conflicts inside the environment")
+
+    runtime = reproduction.get("runtime_checks") or {}
+    if not runtime.get("enabled"):
+        reasons.append(
+            "runtime checks were not requested, so module imports and test "
+            "collection were not verified inside the Conda environment"
+        )
+    return reasons
+
+
 def _attempted(report: ScanReport) -> bool:
     return bool(report.reproduction) and bool(report.reproduction.get("attempted"))
 
@@ -140,6 +194,10 @@ def _partial_reasons(report: ScanReport, findings: list[Finding]) -> list[str]:
         reasons.append(f"{len(warnings)} open warning(s): {', '.join(warnings)}")
 
     reproduction = report.reproduction
+    conda = reproduction.get("conda") if reproduction else None
+    if conda is not None:
+        return _conda_partial_reasons(reproduction or {}, conda, reasons)
+
     if not reproduction.get("installation"):
         reasons.append(
             "no installation was performed: " + _last_step(reproduction)  # type: ignore[arg-type]

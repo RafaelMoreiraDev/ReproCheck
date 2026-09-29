@@ -6,6 +6,69 @@ All notable changes to ReproCheck are recorded here. The format follows
 
 ## [Unreleased] — 2026-09-29
 
+Opt-in Conda environment reproduction. **No version bump, no tag, no
+publication**: the published version is still `0.11.0b3`.
+
+### Added
+
+- **`reprocheck reproduce --conda` builds the project's Conda environment.**
+  Opt-in and off by default. Without the flag the pipeline is the pip one it
+  has always been; the two strategies are never merged, and a report records
+  which one produced it, so a baseline comparison shows a strategy change as a
+  strategy change rather than as a change of versions.
+- **Three managers, in a fixed order: micromamba, mamba, conda.** Discovery
+  stops at the first found and the report records the winner, its version and
+  every candidate that was considered. **No manager is ever installed**: if none
+  is found the attempt stops with RC600 and names all three. Downloading a
+  package manager would be a larger action than the reproduction, and it would
+  not be visible in the report.
+- **`--network` is required on top of `--conda`.** Conda resolves from channels
+  by default, and ReproCheck does not assume an offline solve is possible or
+  safe. The gate is reported as RC604, informational, before any process starts.
+- **Five checks, RC600 to RC604.** RC600 no manager, RC601 no environment file
+  or several and none chosen, RC602 the environment could not be created, RC603
+  the environment's own Python disagrees with what the file declares, RC604 the
+  network gate.
+- **`--conda-env` and `--conda-manager`** name the file and the manager instead
+  of leaving either to a preference, because a reproduction that silently picks
+  one of two environment files is not a reproduction.
+- **The environment is created at `<workspace>/conda-env`**, outside the project
+  and never at `./env` inside it, and it runs with `PYTHONPATH` cleared and
+  `PYTHONNOUSERSITE` set. A prefix that can see the host's packages is not the
+  environment its file describes.
+- **The environment's own Python, `pip check` and its installed packages** are
+  read for the report, so "the environment was created" and "the environment is
+  clean" are two different claims.
+
+### Changed
+
+- A Conda attempt that creates the environment and finds it clean is `PARTIAL`,
+  never `PASS` on its own. The full test suite, external datasets and remote
+  services stay under *Not verified*, as they do for a pip run.
+- `--runtime-checks` accepts an arbitrary interpreter, so the import smoke test
+  and `pytest --collect-only` run against the Conda prefix rather than the host.
+
+### Not changed, deliberately
+
+- No Conda finding produces a patch. Choosing a Python version, a constraint, a
+  channel, or which of two installers wins is a decision ReproCheck will not
+  make.
+- The default path is still pip. Conda reproduction is available; it is not the
+  default.
+
+### Verified
+
+- 721 tests, 0 failures, 3 skipped; the 49 Conda tests use a fake manager and
+  never contact a network, and a marker keeps any real integration out of the
+  default gate.
+- `tqdm` and `mne-python` were run against the real flag. **No Conda manager is
+  installed on this machine and installing one was out of scope**, so the runs
+  establish only that discovery refuses cleanly, starts no process, contacts no
+  channel, leaves both projects byte for byte unchanged, and reports RC600. That
+  a real environment is created and matches its file is **not** verified here.
+
+## [Unreleased] — 2026-09-29
+
 Static support for Conda environment declarations. **No version bump, no tag, no
 publication**: this work is not released yet, and the published version is still
 `0.11.0b3`.

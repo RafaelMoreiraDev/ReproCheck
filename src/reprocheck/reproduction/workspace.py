@@ -13,12 +13,19 @@ import signal
 import subprocess
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from reprocheck.reproduction.models import CommandResult, snippet
 
 WORKSPACE_ROOT_NAME = "reprocheck"
+
+#: Directory name of the Conda environment inside the workspace.
+#:
+#: A Conda environment is a large tree of thousands of files. It lives under
+#: the workspace, never inside the analysed project and never beside it, and it
+#: is removed by the same cleanup as everything else.
+CONDA_PREFIX_NAME = "conda-env"
 
 #: Never copied into the workspace: version control, environments and caches.
 EXCLUDED_NAMES = frozenset(
@@ -60,6 +67,8 @@ class Workspace:
     logs: Path
     artifacts: Path
     report: Path
+    #: Where a Conda environment is created. Outside the project copy.
+    conda_prefix: Path = field(default_factory=Path)
     kept: bool = False
 
     def to_dict(self) -> dict[str, object]:
@@ -70,6 +79,7 @@ class Workspace:
             "logs": str(self.logs),
             "artifacts": str(self.artifacts),
             "report": str(self.report),
+            "conda_prefix": str(self.conda_prefix),
         }
 
 
@@ -92,6 +102,7 @@ def create_workspace(base: Path | None = None) -> Workspace:
         logs=logs,
         artifacts=artifacts,
         report=root / "report.json",
+        conda_prefix=root / CONDA_PREFIX_NAME,
     )
 
 

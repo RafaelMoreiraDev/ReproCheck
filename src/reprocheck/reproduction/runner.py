@@ -25,9 +25,9 @@ from reprocheck.checks.reproduction import check_reproduction
 from reprocheck.checks.verdict import compute_verdict
 from reprocheck.facts import Facts
 from reprocheck.models import ScanReport
+from reprocheck.reproduction import conda, pip_check, python_selector, runtime
 from reprocheck.reproduction import fingerprint as integrity
 from reprocheck.reproduction import installer as installation
-from reprocheck.reproduction import pip_check, python_selector, runtime
 from reprocheck.reproduction import workspace as ws
 from reprocheck.reproduction.models import (
     ReproductionReport,
@@ -51,11 +51,20 @@ def reproduce(
     runtime_checks: bool = False,
     base_dir: Path | None = None,
     timeout: int = ws.DEFAULT_TIMEOUT,
+    conda: bool = False,
+    conda_env: str | None = None,
+    conda_manager: str | None = None,
 ) -> ScanReport:
     """Attempt a controlled reproduction of ``project``.
 
     ``runtime_checks`` is opt-in: it imports the installed package and collects
-    tests, which executes project code. The original project is never modified.
+    tests, which executes project code. ``conda`` is opt-in in the same way and
+    for a stronger reason: it runs a third-party package manager, which
+    downloads and executes packages. The original project is never modified.
+
+    Without ``conda`` the attempt is exactly the pip pipeline it has always
+    been. The two strategies are never merged: a report says which one produced
+    it.
     """
     origin = _resolve(project)
     facts = collect_facts(origin)
@@ -76,6 +85,57 @@ def reproduce(
     steps: list[str] = ["static scan", "workspace created", "project copied"]
     env = _subprocess_env(network=network)
 
+    if conda:
+        env = _conda_subprocess_env()
+        return _reproduce_conda(
+            report,
+            reproduction,
+            workspace,
+            before,
+            origin,
+            steps,
+            keep_workspace,
+            facts,
+            env=env,
+            network=network,
+            environment_file=conda_env,
+            manager_name=conda_manager,
+            runtime_checks=runtime_checks,
+            timeout=timeout,
+        )
+
+    return _reproduce_pip(
+        report,
+        reproduction,
+        workspace,
+        before,
+        origin,
+        steps,
+        keep_workspace,
+        facts,
+        env=env,
+        network=network,
+        runtime_checks=runtime_checks,
+        timeout=timeout,
+    )
+
+
+def _reproduce_pip(
+    report: ScanReport,
+    reproduction: ReproductionReport,
+    workspace: ws.Workspace,
+    before: integrity.Fingerprint,
+    origin: Path,
+    steps: list[str],
+    keep_workspace: bool,
+    facts: Facts,
+    *,
+    env: dict[str, str],
+    network: bool,
+    runtime_checks: bool,
+    timeout: int,
+) -> ScanReport:
+    """The pip pipeline, unchanged by the existence of the Conda one."""
     selection = python_selector.select_python(facts)
     reproduction.python = selection
     if selection.selected is None or selection.executable is None:
@@ -130,6 +190,104 @@ def reproduce(
 
     return _finish(
         report, reproduction, workspace, before, origin, steps, keep_workspace
+    )
+
+
+def _reproduce_conda(
+    report: ScanReport,
+    reproduction: ReproductionReport,
+    workspace: ws.Workspace,
+    before: integrity.Fingerprint,
+    origin: Path,
+    steps: list[str],
+    keep_workspace: bool,
+    facts: Facts,
+    *,
+    env: dict[str, str],
+    network: bool,
+    environment_file: str | None,
+    manager_name: str | None,
+    runtime_checks: bool,
+    timeout: int,
+) -> ScanReport:
+    """Create a Conda environment in the workspace and inspect it.
+
+    No virtual environment and no pip install: the environment file is the
+    specification, and resolving it is the manager's job. What ReproCheck adds is
+    the part a manager does not do: reading back what was actually installed,
+    checking it, and reporting whether the Python matches the file.
+    """
+    attempt = conda.reproduce_conda(
+        project=origin,
+        facts=facts,
+        workspace=workspace,
+        env=env,
+        network=network,
+        environment_file=environment_file,
+        manager_name=manager_name,
+        timeout=timeout,
+    )
+    reproduction.conda = attempt
+    steps.append(f"strategy: {conda.STRATEGY_CONDA}")
+
+    if attempt.manager:
+        steps.append(f"manager: {attempt.manager} {attempt.manager_version or ''}")
+    if attempt.reason:
+        steps.append(f"stopped: {attempt.reason}")
+    if not attempt.success:
+        return _finish(
+            report, reproduction, workspace, before, origin, steps, keep_workspace
+        )
+    steps.append("environment created")
+    steps.append(
+        f"python: {attempt.python_version} "
+        f"(declared {attempt.declared_python or 'not declared'})"
+    )
+    steps.append(f"packages: {attempt.package_count}")
+    if attempt.pip_check.ran:
+        state = "clean" if attempt.pip_check.clean else "with conflicts"
+        steps.append(f"pip check: {state}")
+
+    if runtime_checks and attempt.python_path:
+        _run_conda_runtime_checks(reproduction, workspace, facts, env, steps, attempt)
+
+    return _finish(
+        report, reproduction, workspace, before, origin, steps, keep_workspace
+    )
+
+
+def _run_conda_runtime_checks(
+    reproduction: ReproductionReport,
+    workspace: ws.Workspace,
+    facts: Facts,
+    env: dict[str, str],
+    steps: list[str],
+    attempt,
+) -> None:
+    """Import and collect using the environment's own interpreter.
+
+    Same checks as the pip path and the same warning: this executes code from
+    the project and from every package in the environment.
+    """
+    candidates, reason = runtime.discover_import_targets(
+        workspace, facts.distribution_name or "", env, python=attempt.python_path
+    )
+    reproduction.import_discovery = reason
+    reproduction.imports = runtime.run_import_checks(
+        workspace, candidates, env, python=attempt.python_path
+    )
+    steps.append(f"import smoke test: {len(candidates)} candidate(s)")
+
+    reproduction.test_collection = runtime.collect_tests(
+        workspace, env, python=attempt.python_path
+    )
+    steps.append(
+        "pytest collection: "
+        + (
+            "ran"
+            if reproduction.test_collection.ran
+            else "pytest not installed, skipped"
+        )
     )
 
 
@@ -266,6 +424,19 @@ def _finish(
 
 
 def _succeeded(report: ReproductionReport) -> bool:
+    """Whether the attempt proved what it set out to prove.
+
+    The two strategies are judged by their own criteria. A Conda run has no pip
+    installation step, so requiring one would make every successful Conda
+    attempt look like a failure, keep its workspace, and turn a clean result
+    into a permanent PARTIAL.
+    """
+    if report.conda is not None:
+        return bool(
+            report.conda.success
+            and report.conda.python_version
+            and not (report.conda.pip_check.ran and not report.conda.pip_check.clean)
+        )
     if report.installation is None:
         return False
     return bool(report.installation.success and report.pip_check.clean)
@@ -278,6 +449,22 @@ def _resolve(project: str | Path) -> Path:
     if not path.is_dir():
         raise ReproductionError(f"path is not a directory: {path}")
     return path.resolve()
+
+
+def _conda_subprocess_env() -> dict[str, str]:
+    """Environment for the manager and for the environment's own interpreter.
+
+    The import path is cleared. A Conda prefix that can still see the host's
+    ``PYTHONPATH`` or the user site directory is not the environment it claims to
+    be: a module would import from outside the prefix and the reproduction would
+    be reporting something that is not installed there.
+    """
+    env = dict(os.environ)
+    env["PYTHONNOUSERSITE"] = "1"
+    env.pop("PYTHONPATH", None)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["CONDA_ALWAYS_YES"] = "1"
+    return env
 
 
 def _subprocess_env(*, network: bool) -> dict[str, str]:
