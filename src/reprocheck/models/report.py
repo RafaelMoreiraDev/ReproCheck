@@ -42,6 +42,9 @@ class ScanReport:
     facts: dict[str, object] = field(default_factory=dict)
     dependencies: dict[str, object] = field(default_factory=dict)
     workflow_references: list[dict[str, object]] = field(default_factory=list)
+    #: Conda environment declarations. Always present; empty when the project
+    #: declares none, so a consumer never has to test for the key.
+    conda: dict[str, object] = field(default_factory=dict)
     reproduction: dict[str, object] = field(default_factory=dict)
     reproduction_findings: list[Finding] = field(default_factory=list)
     verdict: ReproducibilityVerdict = field(default_factory=ReproducibilityVerdict)
@@ -83,6 +86,7 @@ class ScanReport:
             ],
             "dependencies": self.dependencies,
             "workflow_references": self.workflow_references,
+            "conda": self.conda,
         }
         if self.reproduction:
             data["reproduction"] = self.reproduction

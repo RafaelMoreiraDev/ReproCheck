@@ -585,7 +585,61 @@ def test_supported_findings_are_documented() -> None:
         "RC150",
         "RC203",
         "RC220",
+        "RC230",
+        "RC231",
+        "RC232",
+        "RC233",
+        "RC234",
+        "RC235",
     }
+
+
+def test_no_conda_rule_proposes_a_patch() -> None:
+    """Conda is MANUAL_ONLY across the board.
+
+    Choosing a Python version, a constraint, a channel or which of two
+    installers wins is a project decision. A patch would be reviewable in
+    isolation and wrong in the project, which is worse than no patch.
+    """
+    from reprocheck.suggest.engine import _RULES
+    from reprocheck.suggest.models import Safety
+
+    conda_ids = [item for item in supported_findings() if item.startswith("RC23")]
+    assert conda_ids, "the Conda rules should be answerable, even if only manually"
+    for finding_id in conda_ids:
+        suggestion = _RULES[finding_id](_finding(finding_id), _context())
+        assert suggestion is not None, finding_id
+        assert suggestion.safety is Safety.MANUAL_ONLY, finding_id
+        assert not suggestion.has_patch, finding_id
+
+
+def _finding(finding_id: str):
+    from reprocheck.models import Confidence, Finding, Severity
+
+    return Finding(
+        id=finding_id,
+        title="t",
+        severity=Severity.WARNING,
+        category="conda",
+        message="m",
+        file="environment.yml",
+        confidence=Confidence.HIGH,
+    )
+
+
+def _context():
+    from reprocheck.suggest.engine import SuggestionContext
+
+    return SuggestionContext(root=Path("."), facts=_facts())
+
+
+def _facts():
+    from reprocheck.facts import Facts
+    from reprocheck.models.project import ProjectScan
+
+    return Facts(
+        project=ProjectScan(name="x", path=str(Path(".")), python_file_count=1)
+    )
 
 
 # --------------------------------------------------------------------------- #

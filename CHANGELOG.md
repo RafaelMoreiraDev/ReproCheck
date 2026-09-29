@@ -4,6 +4,60 @@ All notable changes to ReproCheck are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [PEP 440](https://peps.python.org/pep-0440/) versions.
 
+## [Unreleased] — 2026-09-29
+
+Static support for Conda environment declarations. **No version bump, no tag, no
+publication**: this work is not released yet, and the published version is still
+`0.11.0b3`.
+
+### Added
+
+- **Conda environment declarations are read.** `environment.yml` and
+  `environment.yaml` at the root are parsed for their name, channels, variables,
+  Conda dependencies, the `pip:` subsection and the Python pin. A file named
+  `environment-<something>.yml` is read only when the project names it in the
+  README, the docs or a workflow; no YAML is guessed to be an environment.
+- **Six checks, RC230 to RC235.** RC230 and RC231 report a Python version and a
+  dependency that the environment and the pip metadata prove incompatible.
+  RC232, RC233 and RC235 are informational observations. RC234 reports a file
+  that could not be read.
+- **Conda version syntax is translated only where it is safe.** `numpy=1.26` is
+  the 1.26 series, not `numpy==1.26`, and a build string such as
+  `=1.26=py311np123` is not a version. The original text is kept verbatim, and a
+  constraint with no exact PEP 440 equivalent is left uncompared.
+- **Platform selectors are recorded, not ignored.** `# [win]` is a YAML comment
+  and `safe_load` discards it, so selectors are recovered from the raw text and
+  attached by line number. A dependency that applies to one platform is never
+  compared as if it applied to all of them, which is what would create a
+  conflict on no platform at all.
+- **A `conda` section in the report**, in the JSON, the Markdown and the
+  terminal summary, and a `conda` domain in the baseline comparison covering an
+  environment added or removed, its name, its Python spec, its channels, and a
+  dependency or requirement added, removed or re-specified. Channel order,
+  comments and formatting are not compared.
+- **A report states that the environment was not reproduced.** A project that
+  declares a Conda environment gets it listed under *Not verified*: no conda
+  process was run, no channel was contacted and no environment was solved.
+
+### Changed
+
+- **`PyYAML>=6.0.2` is a second runtime dependency**, used with `safe_load` only.
+  Writing a YAML parser for Conda inside this project would be a worse outcome
+  than the dependency, and 6.0.2 is the first release with wheels for every
+  Python in the supported matrix.
+- A Conda Python pin is classified as its own kind. It is deliberately not a
+  project declaration, because RC103 compares project declarations against each
+  other and would report the same disagreement twice under two ids.
+
+### Not changed, deliberately
+
+- No Conda finding produces a patch. Choosing a Python version, a constraint, a
+  channel, or which of two installers wins is a project decision.
+- No check has an opinion about Conda. Using `defaults`, using `conda-forge`,
+  not pinning, having a `pip:` subsection and having no lockfile are all valid
+  and produce nothing.
+- Conda environments are not reproduced. `reproduce` still uses pip.
+
 ## [0.11.0b3] — 2026-09-28
 
 The distribution is renamed. Nothing about how the tool behaves changes.

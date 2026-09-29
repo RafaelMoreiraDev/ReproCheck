@@ -119,6 +119,7 @@ def test_json_report_is_written(tmp_path: Path, make_project) -> None:
         "findings",
         "dependencies",
         "workflow_references",
+        "conda",
         "verdict",
         "facts",
     ]
@@ -136,6 +137,7 @@ def test_json_report_is_written(tmp_path: Path, make_project) -> None:
         "file_references",
         "tools",
         "gitignore",
+        "conda",
         "project_metadata",
     }
 

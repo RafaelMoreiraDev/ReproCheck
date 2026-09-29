@@ -44,7 +44,14 @@ classifiers = [
   "Topic :: Scientific/Engineering",
   "Typing :: Typed",
 ]
-dependencies = ["packaging>=23.0"]
+dependencies = [
+  "packaging>=23.0",
+  # Conda environment files are YAML. PyYAML is used with safe_load only, so
+  # no custom tag can construct an arbitrary object. 6.0.2 is the floor because
+  # it is the first release with Python 3.13 wheels; 6.0.3 adds 3.14 wheels, so
+  # every Python this project supports installs without building from source.
+  "PyYAML>=6.0.2",
+]
 
 [project.optional-dependencies]
 # Development and test tooling only. The runtime dependency set stays at one

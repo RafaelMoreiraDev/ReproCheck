@@ -185,6 +185,15 @@ def _last_step(reproduction: dict) -> str:
 def _not_verified(report: ScanReport) -> tuple[UnverifiedItem, ...]:
     """What stayed unknown, kept strictly apart from what failed."""
     items: list[UnverifiedItem] = []
+    if (report.conda or {}).get("declared"):
+        items.append(
+            UnverifiedItem(
+                "Conda environment declaration",
+                "a Conda environment was declared and its dependencies were "
+                "read, but it was not reproduced: no conda process was run, no "
+                "channel was contacted and no environment was solved",
+            )
+        )
     if not _attempted(report):
         items.append(
             UnverifiedItem(

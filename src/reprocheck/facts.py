@@ -147,6 +147,10 @@ DEP_SOURCE_DEPENDENCY_GROUP = "dependency-group"
 DEP_SOURCE_BUILD_SYSTEM = "build-system"
 DEP_SOURCE_POETRY = "poetry"
 DEP_SOURCE_CONSTRAINT = "constraint"
+#: A declaration read from the ``pip:`` subsection of a Conda environment.
+#: It is PEP 508 text, but the origin is recorded so a report never claims a
+#: Conda file is a requirements file.
+DEP_SOURCE_CONDA_PIP = "conda-pip"
 
 # How a dependency is obtained when it is not a registry name.
 REF_URL = "url"
@@ -313,6 +317,134 @@ class GitignoreInfo:
         }
 
 
+# --------------------------------------------------------------------------- #
+# Conda environment declarations
+# --------------------------------------------------------------------------- #
+
+#: The environment files ReproCheck treats as a Conda environment by name.
+CONDA_ENVIRONMENT_FILENAMES = ("environment.yml", "environment.yaml")
+
+#: A file name that may be a Conda environment, but only when something in the
+#: project actually names it. No YAML is guessed to be an environment.
+CONDA_ENVIRONMENT_PREFIXES = ("environment-", "environment_")
+
+#: Where a Conda dependency came from inside the file.
+CONDA_SOURCE_DEPENDENCY = "conda"
+CONDA_SOURCE_PIP = "conda-pip"
+
+
+@dataclass(frozen=True, slots=True)
+class CondaDependency:
+    """One entry of a Conda ``dependencies:`` list, exactly as declared.
+
+    Conda version syntax is **not** PEP 440: ``numpy=1.26`` means the 1.26
+    series, ``numpy 1.26*`` is a wildcard, and ``numpy=1.26=py311np123`` ends in
+    a build string that is not a version at all. The original text is therefore
+    kept verbatim in ``raw_spec``, and :attr:`pep440_specifier` holds a
+    translation that is only produced where the two are provably the same set.
+    """
+
+    name: str
+    raw: str
+    source: str = CONDA_SOURCE_DEPENDENCY
+    channel: str | None = None
+    build: str | None = None
+    raw_spec: str = ""
+    pep440_specifier: str | None = None
+    selector: tuple[str, ...] = ()
+    file: str | None = None
+    line: int | None = None
+    is_python: bool = False
+
+    @property
+    def is_conditional(self) -> bool:
+        """True when a platform selector makes the entry platform-specific.
+
+        A conditional entry is never compared as if it applied everywhere: doing
+        so would invent conflicts between platforms.
+        """
+        return bool(self.selector)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "raw": self.raw,
+            "source": self.source,
+            "channel": self.channel,
+            "build": self.build,
+            "raw_spec": self.raw_spec,
+            "pep440_specifier": self.pep440_specifier,
+            "selector": list(self.selector),
+            "file": self.file,
+            "line": self.line,
+            "is_python": self.is_python,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CondaEnvironment:
+    """One Conda environment declaration, as read from a single file.
+
+    Nothing here is judged. ``parse_error`` and ``unsupported`` exist so a
+    malformed or unrecognised structure is reported rather than silently
+    treated as an empty environment.
+    """
+
+    file: str
+    name: str | None = None
+    channels: tuple[str, ...] = ()
+    variables: tuple[str, ...] = ()
+    dependencies: tuple[CondaDependency, ...] = ()
+    parse_error: str | None = None
+    unsupported: tuple[str, ...] = ()
+
+    @property
+    def is_parsed(self) -> bool:
+        return self.parse_error is None
+
+    @property
+    def pip_dependencies(self) -> tuple[CondaDependency, ...]:
+        return tuple(
+            item for item in self.dependencies if item.source == CONDA_SOURCE_PIP
+        )
+
+    @property
+    def conda_dependencies(self) -> tuple[CondaDependency, ...]:
+        return tuple(
+            item for item in self.dependencies if item.source == CONDA_SOURCE_DEPENDENCY
+        )
+
+    @property
+    def python_dependency(self) -> CondaDependency | None:
+        for item in self.dependencies:
+            if item.is_python:
+                return item
+        return None
+
+    @property
+    def declares_pip(self) -> bool:
+        """True when ``pip`` itself is one of the Conda dependencies."""
+        return any(
+            item.source == CONDA_SOURCE_DEPENDENCY and item.name == "pip"
+            for item in self.dependencies
+        )
+
+    @property
+    def has_pip_subsection(self) -> bool:
+        return bool(self.pip_dependencies)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "file": self.file,
+            "name": self.name,
+            "channels": list(self.channels),
+            "variables": list(self.variables),
+            "dependencies": [item.to_dict() for item in self.dependencies],
+            "parse_error": self.parse_error,
+            "unsupported": list(self.unsupported),
+        }
+
+
 @dataclass(slots=True)
 class Facts:
     """Everything the scanners observed, ready to be checked."""
@@ -336,6 +468,12 @@ class Facts:
     requirement_includes: list[RequirementsInclude] = field(default_factory=list)
     workflow_references: list[WorkflowReference] = field(default_factory=list)
     gitignore: GitignoreInfo = field(default_factory=GitignoreInfo)
+    conda_environments: list[CondaEnvironment] = field(default_factory=list)
+
+    @property
+    def has_conda(self) -> bool:
+        """True when the project declares at least one Conda environment."""
+        return bool(self.conda_environments)
 
     def has_file(self, relative: str) -> bool:
         """Return ``True`` when ``relative`` was detected as a file."""
@@ -365,6 +503,14 @@ class Facts:
             ),
             "tools": _sorted(self.tools, "name", "evidence"),
             "gitignore": self.gitignore.to_dict(),
+            "conda": {
+                "environments": [
+                    item.to_dict()
+                    for item in sorted(
+                        self.conda_environments, key=lambda entry: entry.file
+                    )
+                ]
+            },
             "project_metadata": {
                 "name": self.distribution_name,
                 "dependencies": list(self.declared_dependencies),

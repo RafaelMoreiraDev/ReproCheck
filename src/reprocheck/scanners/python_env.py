@@ -32,7 +32,38 @@ def scan_python_requirements(root: Path) -> list[PythonRequirement]:
     requirements.extend(_from_python_version_file(root / ".python-version"))
     requirements.extend(_from_pyproject(root / "pyproject.toml"))
     requirements.extend(_from_workflows(root))
+    requirements.extend(_from_conda(root))
     return requirements
+
+
+def _from_conda(root: Path) -> list[PythonRequirement]:
+    """The Python pin of each Conda environment, as a Conda spec.
+
+    Recorded in the same list as every other source so it appears in the
+    report, the terminal summary and the baseline comparison like any other
+    declaration. The value keeps Conda's own syntax: the check that
+    understands that syntax is :mod:`reprocheck.checks.conda`, and RC104 must
+    not be the one that trips over it.
+    """
+    from reprocheck.scanners import conda
+
+    scan = conda.scan_conda(
+        root, explicitly_named=conda.explicitly_named_environment_files(root)
+    )
+    found: list[PythonRequirement] = []
+    for environment in scan.environments:
+        declaration = environment.python_dependency
+        if declaration is None or not declaration.raw_spec:
+            continue
+        found.append(
+            PythonRequirement(
+                source=f"{environment.file} [dependencies.python]",
+                value=declaration.raw_spec,
+                file=environment.file,
+                line=declaration.line,
+            )
+        )
+    return found
 
 
 def _read_text(path: Path) -> str | None:

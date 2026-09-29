@@ -32,6 +32,17 @@ RC104_UNPARSABLE = "RC104"
 KIND_LOCAL = "local"
 KIND_PROJECT = "project"
 KIND_CI = "ci"
+#: A Python pin written in a Conda environment file.
+#:
+#: It is deliberately **not** KIND_PROJECT. RC103 compares project
+#: declarations against each other, and folding Conda in would report the same
+#: disagreement twice under two ids. Conda has its own rule, RC230, which knows
+#: how to translate Conda's ``=`` pins, so the reconciliation happens once, in
+#: the place that understands the syntax.
+KIND_CONDA = "conda"
+
+#: Source prefixes that identify a Conda environment file.
+CONDA_SOURCE_PREFIXES = ("environment.yml", "environment.yaml", "environment-")
 
 _VERSION_TOKEN_RE = re.compile(r"\d+(?:\.\d+)*")
 _CARET_RE = re.compile(r"^\^(\d+(?:\.\d+)*)$")
@@ -109,6 +120,8 @@ def _parse(requirement: PythonRequirement) -> Declaration:
 def _kind_of(requirement: PythonRequirement) -> str:
     if requirement.source == ".python-version":
         return KIND_LOCAL
+    if requirement.source.startswith(CONDA_SOURCE_PREFIXES):
+        return KIND_CONDA
     if requirement.source.startswith("pyproject.toml"):
         return KIND_PROJECT
     return KIND_CI
@@ -123,6 +136,21 @@ def _normalise(value: str, kind: str) -> str:
         tilde = _TILDE_RE.match(value)
         if tilde:
             return _tilde_to_specifier(tilde.group(1))
+    if kind == KIND_CONDA:
+        # A Conda pin is not PEP 440: `python=3.11` is the 3.11 series. The
+        # scanner already produced the value as a Conda spec, so it is
+        # translated and the wildcard opened into an interval. Without this a
+        # perfectly ordinary environment would be reported as an unparsable
+        # declaration by RC104, which is exactly the kind of false positive
+        # this kind exists to prevent.
+        from reprocheck.scanners.conda import conda_to_pep440
+
+        translated = conda_to_pep440(value)
+        if translated is None:
+            return value
+        from reprocheck.checks.conda import widen_wildcard_pin
+
+        return widen_wildcard_pin(translated)
     return value
 
 

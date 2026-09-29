@@ -27,6 +27,15 @@ from reprocheck.checks.basic import (
     check_tests,
     check_workflows,
 )
+from reprocheck.checks.conda import (
+    RC230_CONDA_PYTHON_CONFLICT,
+    RC231_CONDA_DEPENDENCY_CONFLICT,
+    RC232_CONDA_DEPENDENCY_DIFFERS,
+    RC233_CONDA_PIP_DUPLICATE,
+    RC234_CONDA_UNREADABLE,
+    RC235_CONDA_PIP_NOT_DECLARED,
+    check_conda,
+)
 from reprocheck.checks.dependencies import (
     RC200_CONFLICTING_PINS,
     RC201_DISJOINT_CONSTRAINTS,
@@ -114,6 +123,8 @@ ALL_CHECKS: tuple[Check, ...] = (
     check_workflow_references,
     # V0.6 version provenance
     check_git_derived_version,
+    # V0.12 Conda environment declarations
+    check_conda,
 )
 
 
@@ -124,6 +135,12 @@ def run_checks(facts: Facts, checks: tuple[Check, ...] = ALL_CHECKS) -> list[Fin
 
 __all__ = [
     "ALL_CHECKS",
+    "RC230_CONDA_PYTHON_CONFLICT",
+    "RC231_CONDA_DEPENDENCY_CONFLICT",
+    "RC232_CONDA_DEPENDENCY_DIFFERS",
+    "RC233_CONDA_PIP_DUPLICATE",
+    "RC234_CONDA_UNREADABLE",
+    "RC235_CONDA_PIP_NOT_DECLARED",
     "RC001_NO_README",
     "RC002_NO_PYTHON_VERSION",
     "RC003_NO_PYTHON_CONFIG",

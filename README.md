@@ -29,8 +29,10 @@ python -m pip install reprocheck-cli
 The distribution on PyPI is `reprocheck-cli`; the command is `reprocheck` and
 the importable package is `reprocheck`.
 
-Requires Python 3.11 or newer. The only runtime dependency is
-[`packaging`](https://pypi.org/project/packaging/).
+Requires Python 3.11 or newer. There are two runtime dependencies,
+[`packaging`](https://pypi.org/project/packaging/) for version reasoning and
+[`PyYAML`](https://pypi.org/project/PyYAML/) for reading Conda environment
+files.
 
 ## The six commands
 
@@ -111,6 +113,10 @@ This is part of the product, not a footnote.
 - Not a container manager, and not an experiment tracker.
 - Not a universal dependency solver: it does not choose versions, and it never
   picks one for you.
+- Not a Conda tool. It **inspects** Conda environment declarations; it does not
+  reproduce them. `scan` never runs conda, never contacts a channel, never
+  solves an environment and never writes a lockfile, so a project that uses
+  Conda is checked for contradictions, not for reproducibility.
 - Not proof that a scientific study is reproducible.
 
 A `PASS` verdict means only that **the checks which ran succeeded**. Everything
@@ -1028,6 +1034,41 @@ and `poetry-dynamic-versioning`, from `[build-system] requires` and from the
 corresponding `[tool.*]` sections. The check states the declaration, never that
 the build will fail.
 
+### Conda environment declarations (V0.12)
+
+| ID | Severity | Confidence | Rule |
+| --- | --- | --- | --- |
+| RC230 | error | high | The Conda environment's Python and the project's `requires-python` accept no common version |
+| RC231 | error | high | The same package is declared incompatibly in the environment and in the pip metadata |
+| RC232 | info | high | The same package is declared differently but compatibly in the two |
+| RC233 | info | high | A package is listed both as a Conda dependency and inside the `pip:` subsection |
+| RC234 | error / warning | high | The file is a Conda environment by name but could not be parsed, or contains a structure that is not interpreted |
+| RC235 | info | high | A `pip:` subsection exists but `pip` is not listed as a Conda dependency |
+
+ReproCheck **reads** `environment.yml` and `environment.yaml` at the root. A
+file named `environment-<something>.yml` is only read when the project names it,
+in the README, the docs or a workflow: no YAML is guessed to be an environment.
+YAML is parsed with a safe loader only, so a custom tag can never construct a
+Python object, and a file that uses one is reported rather than executed.
+
+Conda version syntax is not PEP 440. `numpy=1.26` means the 1.26 series, not
+`numpy==1.26`, and `numpy=1.26=py311np123` ends in a build string that is not a
+version at all. The original text is kept verbatim; a PEP 440 form is derived
+only where the two accept the same set of versions, and a constraint that cannot
+be expressed that way is left uncompared rather than guessed at. A `# [win]`
+selector is a YAML comment, so it is recovered from the raw text: a dependency
+that applies to one platform is never compared as if it applied to all of them.
+
+**None of these checks has an opinion about Conda.** Using `defaults`, using
+`conda-forge`, not pinning a dependency, having a `pip:` subsection, and having
+no lockfile are all project decisions, and none of them produces a finding.
+Every Conda finding is `MANUAL_ONLY`: choosing a Python version, a constraint or
+a channel is a decision ReproCheck will not make for you.
+
+The environment is read, not reproduced. When a project declares one, the report
+lists it under **Not verified**: no conda process was run, no channel was
+contacted and no environment was solved.
+
 ## Reproduce: a controlled installation attempt
 
 `scan` never executes anything from the project. `reproduce` does, inside an
@@ -1136,9 +1177,9 @@ real external repository, including the problems it does **not** detect, and
 ## Current limitations
 
 - Python projects only.
-- Dependencies are read from `pyproject.toml` and `requirements*.txt` only.
-  `setup.py`, `setup.cfg`, `Pipfile`, `environment.yml` and Conda files are not
-  parsed, and `constraints.txt` is only read when a `-c` include points to it.
+- Dependencies are read from `pyproject.toml`, `requirements*.txt` and Conda
+  environment files. `setup.py`, `setup.cfg` and `Pipfile` are not parsed, and
+  `constraints.txt` is only read when a `-c` include points to it.
 - Poetry constraints are translated to PEP 440 (`^`, `~`), but Poetry-specific
   sources (git dependencies, path dependencies, multiple constraints) are not
   modelled.

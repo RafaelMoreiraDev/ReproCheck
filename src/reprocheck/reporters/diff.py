@@ -21,6 +21,7 @@ from reprocheck.diff.models import (
 _DOMAIN_TITLE = {
     "dependency": "Dependencies",
     "python": "Python",
+    "conda": "Conda",
     "ci": "CI",
     "reproduction": "Reproduction",
 }
@@ -182,6 +183,7 @@ def _changed_facts(diff: ReproducibilityDiff) -> str:
     groups = (
         ("dependency", diff.dependencies),
         ("python", diff.python),
+        ("conda", diff.conda),
         ("ci", diff.ci),
         ("reproduction", diff.reproduction),
     )
@@ -217,6 +219,7 @@ def _technical(diff: ReproducibilityDiff) -> str:
         "findings changed": len(diff.findings.changed),
         "dependencies": len(diff.dependencies),
         "python declarations": len(diff.python),
+        "Conda facts": len(diff.conda),
         "CI references": len(diff.ci),
         "reproduction facts": len(diff.reproduction),
     }

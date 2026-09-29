@@ -26,6 +26,7 @@ from reprocheck.diff.normalise import (
     LABEL_FIELD,
     changed_attributes,
     normalise_ci,
+    normalise_conda,
     normalise_dependencies,
     normalise_findings,
     normalise_python,
@@ -54,6 +55,7 @@ def compare_reports(baseline: dict, current: dict) -> ReproducibilityDiff:
             "dependency",
         ),
         python=_facts(normalise_python(baseline), normalise_python(current), "python"),
+        conda=_facts(normalise_conda(baseline), normalise_conda(current), "conda"),
         ci=_facts(normalise_ci(baseline), normalise_ci(current), "ci"),
         reproduction=_reproduction(baseline, current),
     )

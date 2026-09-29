@@ -431,6 +431,135 @@ def missing_directory(finding: Finding, context: SuggestionContext) -> FixSugges
     return _readme_reference(finding, "directory", "directory")
 
 
+# --------------------------------------------------------------------------- #
+# Conda: no proposal at all
+# --------------------------------------------------------------------------- #
+#
+# Every Conda finding is MANUAL_ONLY, and none of them carries a patch.
+# Choosing a Python version, a version constraint, a channel or the order of two
+# installers is a project decision ReproCheck cannot make: the right value
+# depends on what the project supports, what the platform binaries need, and
+# what the maintainer intends. A patch here could be syntactically valid and
+# still wrong, and a wrong environment is harder to notice than a broken one.
+
+
+@rule("RC230")
+def conda_python_conflict(
+    finding: Finding, context: SuggestionContext
+) -> FixSuggestion:
+    return _manual(
+        finding,
+        "Decide which Python version this project supports",
+        "ReproCheck proved that the Conda environment and the project "
+        "requirement accept no common Python version. Which of the two to "
+        "change, and to what, is a project decision.",
+        rationale=(
+            "Neither declaration is wrong on its own. Raising requires-python "
+            "may abandon a supported platform; lowering the Conda pin may "
+            "break code that uses a newer feature. ReproCheck does not know "
+            "which the project needs."
+        ),
+        limitations=(
+            "No version is proposed, because choosing one would be a guess "
+            "about the project's support policy.",
+            "Neither declaration is edited; only the conflict is stated.",
+        ),
+    )
+
+
+@rule("RC231")
+def conda_dependency_conflict(
+    finding: Finding, context: SuggestionContext
+) -> FixSuggestion:
+    return _manual(
+        finding,
+        "Decide which constraint to change for the conflicting dependency",
+        "ReproCheck proved that the Conda declaration and the pip "
+        "declaration of the same package accept no common version.",
+        rationale=(
+            "The right constraint depends on what the code needs from that "
+            "package, and on which of the two declarations is the intended "
+            "one. Neither is knowable from the repository."
+        ),
+        limitations=("No version is proposed for either side.", "No file is modified."),
+    )
+
+
+@rule("RC232")
+def conda_dependency_differs(
+    finding: Finding, context: SuggestionContext
+) -> FixSuggestion:
+    return _manual(
+        finding,
+        "Decide whether the two declarations should be aligned",
+        "The Conda and pip declarations of this package differ but are "
+        "compatible. That may be intentional, for instance when a Conda "
+        "channel supplies a build that pip cannot.",
+        rationale=(
+            "A difference that is compatible is not a defect. Aligning it "
+            "would be a style change, and ReproCheck does not decide style."
+        ),
+        limitations=("No alignment is proposed.",),
+    )
+
+
+@rule("RC233")
+def conda_pip_duplicate(finding: Finding, context: SuggestionContext) -> FixSuggestion:
+    return _manual(
+        finding,
+        "Decide which installer should provide this package",
+        "The package is listed both as a Conda dependency and inside the "
+        "'pip' subsection.",
+        rationale=(
+            "Which one wins depends on the order conda solves the "
+            "environment, and ReproCheck does not run conda. Removing either "
+            "line could change the resulting environment."
+        ),
+        limitations=(
+            "Neither declaration is removed.",
+            "The duplicate is only reported.",
+        ),
+    )
+
+
+@rule("RC234")
+def conda_unreadable(finding: Finding, context: SuggestionContext) -> FixSuggestion:
+    return _manual(
+        finding,
+        "Repair or remove this environment declaration",
+        "The file is a Conda environment by name but could not be read, so "
+        "nothing in it was checked.",
+        rationale=(
+            "A malformed or unreadable environment file is a defect in the "
+            "project. Repairing it means understanding what the environment is "
+            "meant to contain, which the file itself no longer states."
+        ),
+        limitations=(
+            "The file is not rewritten; a YAML error is not safely fixable by pattern.",
+            "ReproCheck makes no claim about the contents until the file parses.",
+        ),
+    )
+
+
+@rule("RC235")
+def conda_pip_not_declared(
+    finding: Finding, context: SuggestionContext
+) -> FixSuggestion:
+    return _manual(
+        finding,
+        "Decide whether pip should be an explicit dependency",
+        "The environment has a 'pip' subsection but does not list 'pip' "
+        "among its Conda dependencies. This is frequently intentional.",
+        rationale=(
+            "conda often installs pip transitively, and a project may rely "
+            "on that. Adding an explicit dependency changes the solved "
+            "environment, and removing the subsection changes what is "
+            "installed."
+        ),
+        limitations=("Neither the subsection nor the dependency list is edited.",),
+    )
+
+
 def supported_findings() -> tuple[str, ...]:
     """The finding IDs this version can answer something about."""
     return tuple(sorted(_RULES))

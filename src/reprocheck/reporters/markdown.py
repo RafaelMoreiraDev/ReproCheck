@@ -37,6 +37,7 @@ def render_markdown(report: ScanReport) -> str:
         _reproduction(report),
         _ci(report),
         _dependencies(report),
+        _conda(report),
         _files(report),
         _recommendations(report),
         _technical(report),
@@ -316,6 +317,80 @@ def _dependencies(report: ScanReport) -> str:
     for item in signals:
         lines.append(f"- {item['manager']} ({item['role']}): {item['evidence']}")
     return "\n".join(lines)
+
+
+def _conda(report: ScanReport) -> str:
+    """A short factual section, present only when an environment is declared.
+
+    A summary and the findings, not a dump: a large environment has hundreds
+    of packages and listing them would bury the part a reader needs.
+    """
+    section = report.conda or {}
+    environments = section.get("environments") or []
+    if not environments:
+        return ""
+    summary = section.get("summary") or {}
+    lines = [
+        "## Conda",
+        "",
+        "Static facts from the environment declarations. ReproCheck reads these "
+        "files; it does not run conda, contact a channel, or build the "
+        "environment.",
+        "",
+        f"- Environment files: {summary.get('environments', 0)}",
+        f"- Conda dependencies: {summary.get('dependencies', 0)}",
+        f"- pip requirements inside the environment: {summary.get('pip_dependencies', 0)}",
+        f"- Distinct channels: {summary.get('channels', 0)}",
+    ]
+    for environment in environments:
+        lines.extend(["", f"### {environment['file']}"])
+        python = _conda_python(environment)
+        lines.append(f"- Name: {environment.get('name') or '(not declared)'}")
+        lines.append(f"- Python: {python or '(not declared)'}")
+        channels = environment.get("channels") or []
+        lines.append(
+            "- Channels: " + (", ".join(channels) if channels else "(none declared)")
+        )
+        conda_deps = [
+            item
+            for item in environment.get("dependencies") or []
+            if item.get("source") == "conda" and not item.get("is_python")
+        ]
+        pip_deps = [
+            item
+            for item in environment.get("dependencies") or []
+            if item.get("source") == "conda-pip"
+        ]
+        lines.append(f"- Conda dependencies: {len(conda_deps)}")
+        lines.append(f"- pip requirements: {len(pip_deps)}")
+        conditional = [item for item in conda_deps if item.get("selector")]
+        if conditional:
+            names = ", ".join(
+                f"{item['name']} [{'/'.join(item['selector'])}]"
+                for item in conditional[:8]
+            )
+            more = "" if len(conditional) <= 8 else f", and {len(conditional) - 8} more"
+            lines.append(f"- Platform-specific: {names}{more}")
+        if environment.get("parse_error"):
+            lines.append(f"- Not read: {environment['parse_error']}")
+    findings = [item for item in report.findings if item.id.startswith("RC23")]
+    if findings:
+        lines.extend(["", "### Conda findings"])
+        for finding in findings:
+            location = finding.file or ""
+            if finding.line:
+                location = f"{location}:{finding.line}"
+            lines.append(f"- `{finding.id}` ({finding.severity.value}) {location}")
+            lines.append(f"  {finding.message}")
+    return "\n".join(lines)
+
+
+def _conda_python(environment: dict) -> str | None:
+    for item in environment.get("dependencies") or []:
+        if item.get("is_python"):
+            spec = item.get("raw_spec")
+            return f"{item.get('raw')}" + (f"  ({spec})" if spec else "")
+    return None
 
 
 def _files(report: ScanReport) -> str:

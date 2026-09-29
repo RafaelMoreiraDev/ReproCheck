@@ -20,6 +20,7 @@ from reprocheck.facts import (
 )
 from reprocheck.models import ScanReport
 from reprocheck.scanners import (
+    conda,
     dependencies,
     files,
     git,
@@ -31,6 +32,7 @@ from reprocheck.scanners import (
     tools,
     workflows,
 )
+from reprocheck.scanners.conda import CondaScan
 from reprocheck.scanners.dependencies import DependencyScan
 from reprocheck.scanners.project import scan_project
 
@@ -68,9 +70,28 @@ def build_report(facts: Facts) -> ScanReport:
         facts=facts.to_dict(),
         dependencies=_dependency_section(facts),
         workflow_references=[item.to_dict() for item in facts.workflow_references],
+        conda=_conda_section(facts),
     )
     report.verdict = compute_verdict(report)
     return report
+
+
+def _conda_section(facts: Facts) -> dict[str, object]:
+    """The Conda environments, sorted so the report is byte-stable.
+
+    The section is always present, with an empty list when the project declares
+    no environment. A consumer can therefore ask "does this project use Conda"
+    without first testing whether the key exists.
+    """
+    environments = [
+        item.to_dict()
+        for item in sorted(facts.conda_environments, key=lambda entry: entry.file)
+    ]
+    return {
+        "environments": environments,
+        "declared": bool(environments),
+        "summary": CondaScan(environments=list(facts.conda_environments)).summary,
+    }
 
 
 def _dependency_section(facts: Facts) -> dict[str, object]:
@@ -109,6 +130,13 @@ def collect_facts(root: Path) -> Facts:
     absolute_paths, file_references = paths.scan_paths(root)
     metadata = packaging.scan_project_metadata(root)
     dependency_scan = dependencies.scan_dependencies(root)
+    # Conda is read after the other scanners, because deciding whether a file
+    # named environment-dev.yml is an environment requires the README and file
+    # references those scanners already collected.
+    conda_scan = conda.scan_conda(
+        root,
+        explicitly_named=conda.explicitly_named_environment_files(root),
+    )
     return Facts(
         project=scan_project(root),
         git=git.scan_git(root),
@@ -129,6 +157,7 @@ def collect_facts(root: Path) -> Facts:
         requirement_includes=dependency_scan.includes,
         workflow_references=workflows.scan_workflow_references(root),
         gitignore=gitignore.scan_gitignore(root),
+        conda_environments=conda_scan.environments,
     )
 
 

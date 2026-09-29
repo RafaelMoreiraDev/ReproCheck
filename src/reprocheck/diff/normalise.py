@@ -153,6 +153,77 @@ def _dependency_display(
 
 
 # --------------------------------------------------------------------------- #
+# Conda
+# --------------------------------------------------------------------------- #
+
+
+def normalise_conda(report: dict) -> dict[str, dict[str, str]]:
+    """Conda facts, keyed so that each kind of change is distinguishable.
+
+    Three key spaces share one namespace, joined by a prefix that cannot occur
+    in a filename:
+
+    ``env:<file>``
+        the environment itself: its name, its Python spec, its channels and
+        whether it is readable. An environment added or removed is one change,
+        and a field that changed is an edit of that one fact.
+    ``dep:<file>:<name>``
+        one dependency, so adding or removing a package is one change and
+        changing its spec is an edit.
+    ``pip:<file>:<name>``
+        the same, for the ``pip:`` subsection.
+
+    Channels are sorted and compared as a set, because the order conda resolves
+    them in is not a fact about the declaration. Comments and formatting are
+    never compared: only the parsed values are.
+    """
+    result: dict[str, dict[str, str]] = {}
+    section = report.get("conda") or {}
+    for environment in section.get("environments") or []:
+        file = normalise_text(environment.get("file"))
+        python = next(
+            (
+                item
+                for item in environment.get("dependencies") or []
+                if item.get("is_python")
+            ),
+            None,
+        )
+        channels = environment.get("channels") or []
+        result[f"env:{file}"] = {
+            LABEL_FIELD: f"Conda environment {file}",
+            DISPLAY_FIELD: f"{file} (name: {environment.get('name') or '-'})",
+            "name": normalise_text(environment.get("name")),
+            "python": normalise_text(python.get("raw")) if python else "",
+            "channels": ",".join(sorted(str(item) for item in channels)),
+            "readable": "" if environment.get("parse_error") else "yes",
+        }
+        for dependency in environment.get("dependencies") or []:
+            name = normalise_text(dependency.get("name"))
+            if not name:
+                continue
+            prefix = "pip" if dependency.get("source") == "conda-pip" else "dep"
+            key = f"{prefix}:{file}:{name}"
+            selector = "/".join(dependency.get("selector") or [])
+            channel = normalise_text(dependency.get("channel"))
+            build = normalise_text(dependency.get("build"))
+            spec = normalise_text(dependency.get("raw_spec"))
+            display = dependency.get("raw") or name
+            if channel:
+                display = f"{channel}::{display}"
+            result[key] = {
+                LABEL_FIELD: f"{name} ({file})",
+                DISPLAY_FIELD: f"{name} {spec or '(no constraint)'}".strip(),
+                "raw": normalise_text(dependency.get("raw")),
+                "specifier": spec,
+                "selector": selector,
+                "channel": channel,
+                "build": build,
+            }
+    return result
+
+
+# --------------------------------------------------------------------------- #
 # Python
 # --------------------------------------------------------------------------- #
 

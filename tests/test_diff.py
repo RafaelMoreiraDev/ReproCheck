@@ -574,6 +574,7 @@ def test_diff_json_shape(tmp_path) -> None:
         "findings",
         "dependencies",
         "python",
+        "conda",
         "ci",
         "reproduction",
         "material_change_count",

@@ -152,6 +152,7 @@ class ReproducibilityDiff:
     findings: FindingChanges = field(default_factory=FindingChanges)
     dependencies: tuple[FactChange, ...] = ()
     python: tuple[FactChange, ...] = ()
+    conda: tuple[FactChange, ...] = ()
     ci: tuple[FactChange, ...] = ()
     reproduction: tuple[FactChange, ...] = ()
 
@@ -162,6 +163,7 @@ class ReproducibilityDiff:
             + self.findings.total
             + len(self.dependencies)
             + len(self.python)
+            + len(self.conda)
             + len(self.ci)
             + len(self.reproduction)
         )
@@ -179,6 +181,7 @@ class ReproducibilityDiff:
             "findings": self.findings.to_dict(),
             "dependencies": [item.to_dict() for item in self.dependencies],
             "python": [item.to_dict() for item in self.python],
+            "conda": [item.to_dict() for item in self.conda],
             "ci": [item.to_dict() for item in self.ci],
             "reproduction": [item.to_dict() for item in self.reproduction],
             "material_change_count": self.material_change_count,

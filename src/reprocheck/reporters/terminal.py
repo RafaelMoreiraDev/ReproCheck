@@ -38,6 +38,38 @@ _CATEGORY_LABEL = {
 #: Findings of this category are listed in their own terminal section.
 DEPENDENCY_CATEGORY = "dependencies"
 CI_REFERENCE_CATEGORY = "ci-references"
+CONDA_CATEGORY = "conda"
+
+
+def _conda_section(report: ScanReport) -> list[str]:
+    """The Conda block: counts, then the declarations, then the Python pin."""
+    summary = report.conda.get("summary") or {}
+    lines = [
+        "Conda",
+        f"  environment files: {summary.get('environments', 0)}",
+        f"  dependencies: {summary.get('dependencies', 0)}",
+        f"  pip dependencies: {summary.get('pip_dependencies', 0)}",
+        f"  channels: {summary.get('channels', 0)}",
+    ]
+    for environment in report.conda.get("environments") or []:
+        lines.append(f"  - {environment['file']}")
+        if environment.get("name"):
+            lines.append(f"      name: {environment['name']}")
+        python = next(
+            (
+                item
+                for item in environment.get("dependencies") or []
+                if item.get("is_python")
+            ),
+            None,
+        )
+        lines.append(f"      python: {python['raw'] if python else '(not declared)'}")
+        channels = environment.get("channels") or []
+        if channels:
+            lines.append(f"      channels: {', '.join(channels)}")
+        if environment.get("parse_error"):
+            lines.append(f"      not read: {environment['parse_error']}")
+    return lines
 
 
 def format_report(
@@ -89,10 +121,15 @@ def format_report(
     lines.extend(_dependency_section(report))
     lines.append("")
 
+    if report.conda.get("environments"):
+        lines.extend(_conda_section(report))
+        lines.append("")
+
     general = [
         item
         for item in report.findings
-        if item.category not in {DEPENDENCY_CATEGORY, CI_REFERENCE_CATEGORY}
+        if item.category
+        not in {DEPENDENCY_CATEGORY, CI_REFERENCE_CATEGORY, CONDA_CATEGORY}
     ]
     dependency = [
         item for item in report.findings if item.category == DEPENDENCY_CATEGORY
@@ -104,6 +141,12 @@ def format_report(
     lines.append("")
     lines.extend(_findings_section(dependency, title="Dependency findings"))
     lines.append("")
+    conda_findings = [
+        item for item in report.findings if item.category == CONDA_CATEGORY
+    ]
+    if conda_findings:
+        lines.extend(_findings_section(conda_findings, title="Conda findings"))
+        lines.append("")
     lines.extend(_ci_reference_section(report))
     lines.extend(_findings_section(ci_references, title="CI findings"))
     if report.reproduction:

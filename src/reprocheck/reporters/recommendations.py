@@ -276,6 +276,44 @@ RECOMMENDATIONS: dict[str, Recommendation] = {
         "Check whether the image digest matters; a tag resolves to a different "
         "image over time.",
     ),
+    # -- Conda environment declarations ---------------------------------- #
+    "RC230": _rec(
+        "RC230",
+        "The Conda environment and the project require different Python versions",
+        "Decide which of the two is the intended support policy and align the "
+        "other with it. ReproCheck proved the two accept no common version; "
+        "it will not choose one for you.",
+    ),
+    "RC231": _rec(
+        "RC231",
+        "A dependency is declared incompatibly in the Conda environment",
+        "Check which of the two constraints the code actually needs, then "
+        "align the Conda declaration and the pip declaration on it.",
+    ),
+    "RC232": _rec(
+        "RC232",
+        "A dependency is declared differently but compatibly",
+        "Confirm the difference is intended. A Conda channel may supply a "
+        "build that pip cannot, in which case both declarations are correct.",
+    ),
+    "RC233": _rec(
+        "RC233",
+        "A package is declared both as Conda and as a pip requirement",
+        "Decide which installer should provide it, so the solved environment "
+        "is not left to the order conda happens to resolve the entries in.",
+    ),
+    "RC234": _rec(
+        "RC234",
+        "A Conda environment could not be read",
+        "Repair the YAML. Until it parses, ReproCheck makes no claim about "
+        "anything the environment declares, including its Python version.",
+    ),
+    "RC235": _rec(
+        "RC235",
+        "A pip subsection is present without pip being a Conda dependency",
+        "Confirm this is deliberate. It often is, because conda installs pip "
+        "transitively; the finding is informational, not a defect.",
+    ),
     # -- reproduction ----------------------------------------------------- #
     "RC400": _rec(
         "RC400",

@@ -292,6 +292,78 @@ process, reported as RC150 and RC401 with the backend's own error text. The beta
 gate is about ReproCheck's behaviour on those projects, not about their
 reproducibility.
 
+## Conda environments: TASK-016 addendum
+
+The same five clones, re-scanned after the Conda source was added. This section
+answers two questions the earlier exercise could not: which of these projects
+actually declares a Conda environment, and what does the tool make of it.
+
+| Project | environment file | name | Python | channels | Conda deps | pip subsection | findings |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| [pint](https://github.com/hgrecco/pint) | none | - | - | - | 0 | 0 | none |
+| [tqdm](https://github.com/tqdm/tqdm) | environment.yml | 	qdm | python >=3.8 | conda-forge, defaults | 30 | 5 | 1 × RC232 |
+| [astropy](https://github.com/astropy/astropy) | none | - | - | - | 0 | 0 | none |
+| [mne-python](https://github.com/mne-tools/mne-python) | environment.yml | mne | python >=3.11 | conda-forge | 66 | 3 | 1 × RC232 |
+| [napari](https://github.com/napari/napari) | none | - | - | - | 0 | 0 | none |
+
+Two of the five declare an environment, and both were read. **No error was
+raised on any project**: no RC230, no RC231, no RC234, and the two RC232
+observations are informational. All five clones finished with git status
+--porcelain at 0 lines.
+
+### Every finding, classified by hand
+
+| Project | Finding | Evidence | Classification |
+| --- | --- | --- | --- |
+| tqdm | RC232 | environment.yml:11 declares ipywidgets unbounded; pyproject [notebook] declares ipywidgets>=6. Witness: 6.0 | **reasonable** |
+| tqdm | RC232 | environment.yml:12 declares setuptools; pyproject [build-system] declares setuptools>=42 | **false positive - fixed** |
+| mne-python | RC232 | environment.yml:45 declares pillow unbounded; pyproject [test] declares pillow >= 10.2. Witness: 10.2.0 | **reasonable** |
+
+**The false positive, and what it was.** [build-system] requires is installed
+in an *isolated build environment* used to assemble the wheel. It is not what
+runs. The project's own scope table already said a uild declaration is never
+compared with anything, and the first version of the Conda check did compare
+it, which produced a finding about two unrelated things. The check now excludes
+uild, the message names the section it compared against so a reader can judge
+scope, and 	est_build_system_requirements_are_never_compared is the regression
+test, written from a synthetic fixture rather than from tqdm.
+
+**The two remaining findings are useful, not noise.** Both say the Conda
+environment does not pin something the project's metadata requires a minimum of.
+Creating the environment as written can leave the project with a version its own
+metadata rules out. Neither is a defect in the project, and both are info.
+
+### Performance
+
+The Conda source reads at most a handful of small YAML files, and that cost was
+measured rather than assumed, on the largest clone available.
+
+| Project | Before (55e01e4) | After | Difference |
+| --- | --- | --- | --- |
+| mne-python | 5.789 s (median of 3) | 5.836 s (median of 3) | **+0.047 s, +0.8%** |
+
+The before figure comes from a git worktree of the commit preceding this work,
+run in a separate process, so the two trees are compared without either
+disturbing the other. +0.8% on the largest project is not worth optimising, and
+no micro-optimisation was attempted.
+
+### What this addendum does not establish
+
+- **No Conda environment was reproduced.** scan never runs conda, contacts a
+  channel or solves anything, so none of these five environments was created,
+  and nothing here says a Conda project reproduces. The report states this per
+  project under *Not verified*.
+- **Two of the five do not use Conda at all**, so the sample of environments is
+  two, not five. Both are development environments that a contributor creates by
+  hand, which is the most common shape; neither is a published, solved,
+  locked environment.
+- **No environment with a conflict was available in the wild.** RC230 and RC231
+  are covered by the internal suite only, on synthetic fixtures built to make
+  the conflict provable. That is a real gap in this validation.
+- Platform selectors were not exercised by a real project either: neither of
+  the two files uses a # [win] selector, so the anti-false-positive rule for
+  them is covered by the internal suite only.
+
 ## What this validation does not establish
 
 - No dynamic step was isolated at the operating-system level: Docker is not

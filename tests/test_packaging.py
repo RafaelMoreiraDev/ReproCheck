@@ -145,7 +145,26 @@ def test_module_entry_point_resolves_to_the_same_function() -> None:
 
 
 def test_runtime_dependencies_stay_minimal() -> None:
-    assert PYPROJECT["project"]["dependencies"] == ["packaging>=23.0"]
+    """Two dependencies, and every one of them has to earn its place.
+
+    ``packaging`` does the version reasoning. ``PyYAML`` parses the Conda
+    environment files, which are YAML; writing a parser for them inside this
+    project would be a worse outcome than the dependency. Both are pinned to a
+    floor that has wheels for every Python this project supports, so an install
+    never builds from source.
+    """
+    assert PYPROJECT["project"]["dependencies"] == [
+        "packaging>=23.0",
+        "PyYAML>=6.0.2",
+    ]
+    # The floor is a decision, not a habit: 6.0.2 is the first PyYAML release
+    # with Python 3.13 wheels, and 3.13 is in the supported matrix.
+    floors = {
+        item.split(">=")[0].lower(): item.split(">=")[1]
+        for item in PYPROJECT["project"]["dependencies"]
+    }
+    assert floors["pyyaml"] == "6.0.2"
+    assert floors["packaging"] == "23.0"
 
 
 def test_dev_extras_carry_the_tooling() -> None:
