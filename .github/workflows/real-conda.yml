@@ -78,12 +78,13 @@ jobs:
       - name: Install micromamba
         uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
         with:
-          # Pinned, not `latest`. `2.9.0` resolves to the release tag
-          # `2.9.0-0`, which is the exact artefact TASK-018 verified on Windows.
-          # The first `setup-micromamba` release declaring node24 is v3; the v2
-          # line declared node20, which GitHub has deprecated, and an action
-          # printed on every run is noise this project removed once already.
-          micromamba-version: "2.9.0"
+          # Pinned, not `latest`. This is the release **tag**, which is what the
+          # action validates: `2.9.0` on its own is rejected, and the tag form
+          # is what TASK-018 downloaded and verified by sha256 on Windows. The
+          # first `setup-micromamba` release declaring node24 is v3; the v2 line
+          # declared node20, which GitHub has deprecated, and an action printed
+          # on every run is noise this project removed once already.
+          micromamba-version: "2.9.0-0"
           # The package and repodata cache, and nothing else. `cache-environment`
           # is left off on purpose: a cached environment would let the tests
           # pass without ever solving anything, which is the one thing they

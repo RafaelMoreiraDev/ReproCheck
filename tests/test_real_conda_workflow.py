@@ -230,7 +230,14 @@ def test_the_cache_holds_packages_and_not_the_environment() -> None:
 
 
 def test_the_manager_version_is_pinned_and_asserted() -> None:
-    assert re.search(r"micromamba-version:\s*\"2\.9\.0\"", TEXT)
+    # The release **tag**, not `2.9.0`. The action validates the tag form and
+    # rejects the bare version, which a first run of this workflow found out the
+    # expensive way: the job died in eight seconds, which is at least a fast way
+    # to find out.
+    assert re.search(r'micromamba-version:\s*"2\.9\.0-0"', TEXT)
+    assert not re.search(r'micromamba-version:\s*"2\.9\.0"', TEXT), (
+        "the bare version is rejected by the action; the tag is 2.9.0-0"
+    )
     assert not re.search(r"micromamba-version:\s*[\"']?latest", TEXT), (
         "latest would change under a schedule nobody reviews"
     )
