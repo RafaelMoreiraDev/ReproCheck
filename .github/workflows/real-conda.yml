@@ -1,0 +1,152 @@
+# Scheduled integration run for the real Conda reproduction.
+#
+# `ci.yml` is the gate on every push and pull request, and it deliberately does
+# not touch Conda: a real solve needs a network and minutes of wall clock, which
+# is what makes it flaky rather than useful. This workflow exists so that
+# something still notices when micromamba changes the shape of its output.
+#
+# It is **not** a required check. Nothing in `ci.yml` or `release.yml` waits for
+# it, and a red run here does not block a release. It is a weekly signal, and it
+# is also dispatchable by hand after a change to the Conda code.
+#
+# Every action is pinned to a full commit SHA, which is what RC220 asks of a
+# project: a tag is a mutable reference. The human-readable version is kept in a
+# comment next to each pin. The `checkout` and `setup-python` pins are the same
+# SHAs `ci.yml` and `release.yml` use on purpose, because two versions of one
+# action in two workflows is what RC221 reports.
+#
+# TASK-018 ran this whole path on Windows and every real difference it found was
+# Windows-specific: a Conda prefix keeps `python.exe` at its root, not in
+# `Scripts`. So this runs on `windows-latest` and only there. Linux and macOS are
+# covered by `ci.yml`, which runs the whole suite on both, but nothing here
+# claims a real POSIX solve has ever been reproduced.
+
+name: Real Conda integration
+
+on:
+  schedule:
+    # Sunday, 04:17 UTC. Not on the hour, and not at midnight: every scheduled
+    # workflow in the world aims for those, and the queue is the worst part of
+    # a slow job.
+    - cron: "17 4 * * 0"
+  workflow_dispatch:
+
+# Read the repository and nothing else. No `id-token`, so nothing here can mint
+# a credential, and no `packages: write`, so nothing here can publish. This
+# workflow needs no secret at all: micromamba and conda-forge are public, and
+# the tests contact nothing that wants authenticating.
+permissions:
+  contents: read
+
+concurrency:
+  group: real-conda-${{ github.ref }}
+  # Not cancelled when superseded. A cold solve takes tens of minutes, and
+  # killing one to start another wastes the window instead of saving it.
+  cancel-in-progress: false
+
+jobs:
+  real-conda:
+    name: real conda integration (windows)
+    runs-on: windows-latest
+    # TASK-018 measured 1300 s for a cold tqdm solve and 913 s for mne, from a
+    # warm package cache. Sixty minutes leaves room for a cold cache, a solver
+    # that takes its time, and the download, while still refusing to let a
+    # runaway job hold a runner overnight.
+    timeout-minutes: 60
+    env:
+      # The fixtures and the kept workspaces go here so the failure artifacts
+      # have a stable place to be collected from. `source/` and `conda-env/`
+      # are excluded when uploading: one is a copy of a public repository and
+      # the other is a whole environment.
+      CONDA_LOGS: conda-logs
+    steps:
+      - name: Check out
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          # One version on purpose. The fixtures pin `python=<the running
+          # interpreter>`, so a matrix would mean a different solve per entry,
+          # and the point of this workflow is to notice when a manager changes
+          # shape, not to re-assert the matrix `ci.yml` already runs on every
+          # push. 3.12 is the version `ci.yml`'s packaging job builds on.
+          python-version: "3.12"
+
+      - name: Install micromamba
+        uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
+        with:
+          # Pinned, not `latest`. `2.9.0` resolves to the release tag
+          # `2.9.0-0`, which is the exact artefact TASK-018 verified on Windows.
+          # The first `setup-micromamba` release declaring node24 is v3; the v2
+          # line declared node20, which GitHub has deprecated, and an action
+          # printed on every run is noise this project removed once already.
+          micromamba-version: "2.9.0"
+          # The package and repodata cache, and nothing else. `cache-environment`
+          # is left off on purpose: a cached environment would let the tests
+          # pass without ever solving anything, which is the one thing they
+          # exist to do. The solve runs on every run, hit or miss.
+          #
+          # The key carries the manager version, the Python version, and a hash
+          # of the file that defines the fixtures, because a changed dependency
+          # must not be answered out of a stale cache. It over-approximates:
+          # any edit to that test file invalidates the cache, which costs a cold
+          # solve and errs towards proving the thing again.
+          cache-downloads: true
+          cache-downloads-key: reprocheck-conda-2.9.0-py3.12-${{ hashFiles('tests/test_conda_reproduction.py') }}
+          # Keep the environment itself: it is what the tests must create.
+          post-cleanup: "none"
+
+      - name: Report the manager
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "micromamba on PATH: $(command -v micromamba)"
+          reported="$(micromamba --version)"
+          echo "micromamba version : ${reported}"
+          # Asserted rather than logged. A schedule that silently started using
+          # a different manager version would invalidate every duration in
+          # docs/external-validation.md without saying so.
+          if [ "${reported}" != "2.9.0" ]; then
+            echo "::error::expected micromamba 2.9.0, got ${reported}"
+            exit 1
+          fi
+          echo "micromamba root    : ${MAMBA_ROOT_PREFIX:-<unset>}"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Confirm the default suite needs no manager
+        run: |
+          # The point of the marker is that the ordinary gate is untouched. If
+          # this ever needs a manager, the split has rotted and this is where
+          # it shows up.
+          python -m pytest -m "not real_conda" --collect-only -q | tail -n 1
+
+      - name: Test against the real manager
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Only the real-manager tests. The full suite belongs to ci.yml, which
+          # runs it on three versions on every push; repeating it here would
+          # spend the window proving what that already proved.
+          python -m pytest -m real_conda -v --durations=0 --basetemp="${CONDA_LOGS}"
+
+      - name: Upload the failure evidence
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: real-conda-failure-${{ github.run_id }}
+          # The log files, and only the log files. `source/` is a copy of
+          # somebody's repository and `conda-env/` is a whole environment of
+          # thousands of files, neither of which helps anybody read a failure.
+          path: |
+            ${{ env.CONDA_LOGS }}/**/logs/*.log
+            !${{ env.CONDA_LOGS }}/**/conda-env/**
+            !${{ env.CONDA_LOGS }}/**/source/**
+          retention-days: 14
+          if-no-files-found: warn

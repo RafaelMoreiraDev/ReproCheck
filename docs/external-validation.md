@@ -526,8 +526,33 @@ virtual machine was available on this machine, so there was **no operating
 system isolation**: a Conda environment changes which packages are installed and
 nothing about authority. See [reproduction-safety.md](reproduction-safety.md).
 
-### What this section does not establish
+### Keeping this honest after the fact
 
+Everything above is a point-in-time observation, and an observation that is
+never repeated stops being evidence. `pytest -m real_conda` runs weekly in
+`.github/workflows/real-conda.yml`, on `windows-latest` because every real
+difference found here was Windows-specific, and by hand on demand. It is **not**
+a required check and is not triggered by a push or a pull request: a solve of
+this size on the critical path of every commit is how a signal turns into
+noise.
+
+Three things in that workflow are deliberate rather than incidental. It pins
+micromamba to `2.9.0` and asserts the reported version at run time, so the
+durations above cannot quietly stop describing what ran. It caches the package
+and repodata cache but **never the environment**, so a warm run still solves and
+still creates; a cached environment would make the tests pass without doing the
+only thing they exist to do. And its timeout of 60 minutes is derived from the
+1300 s and 913 s measured here, with room for a cold cache, rather than picked.
+
+The workflow file is itself asserted on, in `tests/test_real_conda_workflow.py`:
+that it has a schedule and a dispatch, that it has no `push` or `pull_request`
+trigger, that every action is a full commit SHA on a Node 24 runtime, that its
+`checkout` and `setup-python` pins match the other workflows, that it holds no
+secret and grants only `contents: read`, and that the failure artifacts exclude
+the environment. A workflow that quietly stops being what it claims is a worse
+problem than one that breaks, and nothing would have noticed.
+
+### What this section does not establish
 - Only **micromamba** was exercised. `conda` and `mamba` are supported and
   untested against a real binary; their `--json` shapes are assumed to match.
 - Windows only. The POSIX prefix layout, and `bin/python`, are covered by unit

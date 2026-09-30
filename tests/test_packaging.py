@@ -356,6 +356,18 @@ EXPECTED_ACTIONS = {
         "v1.14.2",
         "composite",
     ),
+    # Maintained by the mamba ecosystem, and the only reason a Conda manager is
+    # on the runner at all. Read from its action.yml at the pinned commit: v3.2.1
+    # declares node24 and v3.1.0 and below declare node20, so the pin is the
+    # first of the node24 line rather than the newest release of the v2 line.
+    # v3.2.1 is not the newest release, and deliberately so: a newer one has not
+    # been read at its commit yet, and a pin nobody audited is worse than one
+    # that is a release behind.
+    "mamba-org/setup-micromamba": (
+        "f457c30a868e4760d3a6fcea5f25dc655b8edf39",
+        "v3.2.1",
+        "node24",
+    ),
 }
 
 #: The pins that were in place while the Node 20 warning was firing. Kept so a
@@ -369,19 +381,21 @@ NODE20_PINS = {
 
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+REAL_CONDA_WORKFLOW = ROOT / ".github" / "workflows" / "real-conda.yml"
 CI = CI_WORKFLOW.read_text(encoding="utf-8")
 RELEASE = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+REAL_CONDA = REAL_CONDA_WORKFLOW.read_text(encoding="utf-8")
 
 
 def _all_uses() -> list[tuple[str, str, str]]:
     """Return ``(action, sha, tag)`` for every ``uses:`` in every workflow.
 
-    Workflow by workflow on purpose. Merging the two into one dictionary lets
+    Workflow by workflow on purpose. Merging the three into one dictionary lets
     the last workflow overwrite the first, which is exactly how a pin that only
     regressed in one file would slip through unnoticed.
     """
     rows: list[tuple[str, str, str]] = []
-    for workflow in (CI, RELEASE):
+    for workflow in (CI, RELEASE, REAL_CONDA):
         for action, (sha, tag) in _uses(workflow).items():
             rows.append((action, sha, tag))
     return rows

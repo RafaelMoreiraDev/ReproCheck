@@ -35,6 +35,12 @@ no tag, no publication**: the published version is still `0.11.0b3`.
   end-to-end solve and a real pytest collection, not only `--version`. Still
   never part of the default gate: `pytest -m real_conda` needs a manager, a
   network and minutes of wall clock.
+- **The real-manager tests run on a schedule**, in a separate workflow
+  (`real-conda.yml`) on Windows, weekly and by hand. It is deliberately not a
+  required check and not triggered by a push or a pull request: a real solve
+  takes tens of minutes, and putting that on the critical path of every commit
+  is how a signal becomes noise. It caches the package and repodata cache and
+  never the environment, so every run still solves.
 - The fake manager in the test suite no longer installs the project into the
   prefix, and copies pytest's real dependency closure, walked from the
   distributions' own metadata, rather than a hand-written list.
