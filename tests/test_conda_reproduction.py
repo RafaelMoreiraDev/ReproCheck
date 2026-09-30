@@ -1465,35 +1465,47 @@ def test_the_project_path_with_spaces_survives(
 
 
 def test_the_interpreter_is_found_where_a_conda_prefix_puts_it(tmp_path) -> None:
-    # A real micromamba prefix on Windows puts python.exe at the prefix root; a
-    # virtual environment puts it in Scripts. Assuming the venv layout made a
-    # real environment that had been created successfully report as a failure,
-    # because the interpreter appeared to be missing.
-    prefix = tmp_path / "conda"
-    prefix.mkdir(parents=True, exist_ok=True)
-    (prefix / "python.exe").write_bytes(b"")
+    # A real micromamba prefix keeps python.exe at the prefix root on Windows;
+    # on POSIX the layout is bin/python. Assuming the virtual-environment layout
+    # made a real environment that had been created successfully report as a
+    # failure, because the interpreter appeared to be missing. The layouts come
+    # from the code under test, so the test is about the probe and not about
+    # which platform happens to run it.
+    from reprocheck.reproduction.conda_manager import _interpreter_candidates
 
-    found = _real_manager().python_path(prefix)
+    conda_layout, venv_layout = _interpreter_candidates(tmp_path)
+    conda_layout.parent.mkdir(parents=True, exist_ok=True)
+    conda_layout.write_bytes(b"")
 
-    assert found == str(prefix / "python.exe")
+    found = _real_manager().python_path(tmp_path)
+
+    assert found == str(conda_layout)
     assert Path(found).exists()
+    assert found != str(venv_layout)
 
 
 def test_a_virtual_environment_shaped_prefix_still_resolves(tmp_path) -> None:
-    prefix = tmp_path / "venv"
-    (prefix / "Scripts").mkdir(parents=True, exist_ok=True)
-    (prefix / "Scripts" / "python.exe").write_bytes(b"")
+    # The second candidate is probed, not only the first. On Windows that is the
+    # virtual-environment location, which is the only place a venv keeps its
+    # interpreter; on POSIX the two layouts coincide and this is the same
+    # directory reached by the other name.
+    from reprocheck.reproduction.conda_manager import _interpreter_candidates
 
-    assert _real_manager().python_path(prefix) == str(prefix / "Scripts" / "python.exe")
+    _conda_layout, venv_layout = _interpreter_candidates(tmp_path)
+    venv_layout.parent.mkdir(parents=True, exist_ok=True)
+    venv_layout.write_bytes(b"")
+
+    assert _real_manager().python_path(tmp_path) == str(venv_layout)
 
 
 def test_a_missing_interpreter_names_the_path_that_was_expected(tmp_path) -> None:
-    prefix = tmp_path / "empty"
-    prefix.mkdir(parents=True, exist_ok=True)
+    from reprocheck.reproduction.conda_manager import _interpreter_candidates
 
-    expected = _real_manager().python_path(prefix)
+    conda_layout, _venv_layout = _interpreter_candidates(tmp_path)
 
-    assert expected == str(prefix / "python.exe")
+    expected = _real_manager().python_path(tmp_path)
+
+    assert expected == str(conda_layout)
     assert not Path(expected).exists()
 
 
