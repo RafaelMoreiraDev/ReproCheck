@@ -268,10 +268,18 @@ def _run_conda_runtime_checks(
 
     Same checks as the pip path and the same warning: this executes code from
     the project and from every package in the environment.
+
+    A Conda environment does not contain the project. The environment file
+    describes the environment, and installing the project into it would be a pip
+    action inside a Conda reproduction, so the import smoke test has nothing of
+    the project's own to import and says so. Left unsaid, "distribution not
+    installed" reads as a project that failed to install.
     """
     candidates, reason = runtime.discover_import_targets(
         workspace, facts.distribution_name or "", env, python=attempt.python_path
     )
+    if not candidates and reason:
+        reason = _conda_import_reason(reason)
     reproduction.import_discovery = reason
     reproduction.imports = runtime.run_import_checks(
         workspace, candidates, env, python=attempt.python_path
@@ -289,6 +297,17 @@ def _run_conda_runtime_checks(
             else "pytest not installed, skipped"
         )
     )
+
+
+def _conda_import_reason(reason: str) -> str:
+    """Say why a Conda environment offers nothing to import, in those words."""
+    if "not installed" in reason:
+        return (
+            "a Conda environment does not contain the project, so there is no "
+            "module of its own to import; the packages the environment does "
+            "contain were not imported either"
+        )
+    return reason
 
 
 def _run_runtime_checks(

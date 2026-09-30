@@ -27,6 +27,14 @@ _MISSING_RE = re.compile(
     r"which is not installed\.?\s*$"
 )
 
+#: ``wcwidth 0.9.1 is not supported on this platform``, seen in a real tqdm
+#: environment. pip exits non-zero for a distribution it refuses to install
+#: rather than for a version mismatch, and the three patterns above recognise
+#: none of it.
+_UNSUPPORTED_RE = re.compile(
+    r"^(?P<package>\S+)\s+(?P<version>\S+)\s+is not supported on this platform\.?\s*$"
+)
+
 _BROKEN_MARKERS = ("broken environment", "the environment is broken")
 
 
@@ -75,6 +83,13 @@ def parse_conflicts(output: str) -> tuple[str, ...]:
             conflicts.append(
                 f"{missing.group('package')} requires "
                 f"{missing.group('required')}, which is not installed"
+            )
+            continue
+        unsupported = _UNSUPPORTED_RE.match(line)
+        if unsupported:
+            conflicts.append(
+                f"{unsupported.group('package')} {unsupported.group('version')} "
+                f"is not supported on this platform, so pip refuses to install it"
             )
             continue
         if any(marker in line.lower() for marker in _BROKEN_MARKERS):

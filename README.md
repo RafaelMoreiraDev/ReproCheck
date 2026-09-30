@@ -1104,6 +1104,11 @@ manager is ever installed.** If none is found the attempt stops with RC600 and
 names all three; downloading a package manager would be a larger action than the
 reproduction, and it would not be visible in the report.
 
+> On Windows the micromamba release downloads as `micromamba-win-64.exe`.
+> Discovery looks for `micromamba`, so the file has to be named `micromamba.exe`
+> or be on the `PATH` under that name. This was found by running the real
+> binary, not by reading its documentation.
+
 `--network` is required. Conda resolves packages from channels by default, and
 ReproCheck does not assume an offline solve is possible or safe. The environment
 is created **inside the temporary workspace**, never inside or beside the

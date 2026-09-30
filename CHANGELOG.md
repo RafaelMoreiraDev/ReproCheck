@@ -4,6 +4,48 @@ All notable changes to ReproCheck are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [PEP 440](https://peps.python.org/pep-0440/) versions.
 
+## [Unreleased] — 2026-09-30
+
+Validation of the Conda reproduction against a real solver. **No version bump,
+no tag, no publication**: the published version is still `0.11.0b3`.
+
+### Fixed
+
+- **A Conda prefix on Windows is no longer assumed to be a virtual
+  environment.** A real prefix keeps `python.exe` at the prefix root, so an
+  environment that had been created successfully, with exit code 0, was
+  reported as a failure because the interpreter appeared to be missing. The
+  interpreter path is now probed, and a genuinely missing one still names the
+  path that was expected. Found by running `tqdm` and `mne-python` against
+  micromamba 2.9.0.
+- **`pip check` can fail for a reason that is not a version mismatch.** pip
+  exits non-zero for a distribution it refuses to install, reporting
+  `wcwidth 0.9.1 is not supported on this platform`. No pattern recognised it,
+  so a real environment defect was reported as "not clean" with nothing named
+  and no finding at all. That shape is now parsed, and a failure still not
+  recognised says so rather than claiming a conflict.
+- **The Conda import smoke test says why it has nothing to do.** A
+  `conda env create` does not install the project, so there is no module of the
+  project's own to import. The reason now says that, instead of
+  "distribution not installed", which read as a project that failed to install.
+
+### Changed
+
+- The optional integration marker is `real_conda`, and it now covers a real
+  end-to-end solve and a real pytest collection, not only `--version`. Still
+  never part of the default gate: `pytest -m real_conda` needs a manager, a
+  network and minutes of wall clock.
+- The fake manager in the test suite no longer installs the project into the
+  prefix, and copies pytest's real dependency closure, walked from the
+  distributions' own metadata, rather than a hand-written list.
+
+### Not changed, deliberately
+
+- Only micromamba was validated against a real binary. `conda` and `mamba` are
+  still supported and still untested, and their `--json` shapes are assumed.
+- Real Conda reproduction is not added to the main CI workflow. It needs a
+  network and minutes per job, which is what makes it flaky rather than useful.
+
 ## [Unreleased] — 2026-09-29
 
 Opt-in Conda environment reproduction. **No version bump, no tag, no

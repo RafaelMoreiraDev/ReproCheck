@@ -245,12 +245,26 @@ class CondaManager:
     def python_path(self, prefix: Path) -> str:
         """Path of the interpreter inside a Conda prefix.
 
-        Layout is identical on every platform Conda supports: ``bin`` on POSIX,
-        ``Scripts`` on Windows.
+        The candidates are **probed** rather than assumed, because the two
+        layouts genuinely differ and guessing wrong is not a cosmetic error: a
+        real Conda prefix on Windows puts ``python.exe`` at the prefix root,
+        while a virtual environment puts it in ``Scripts``. Assuming the venv
+        layout made a real environment that had been created successfully
+        report as a failure, because the interpreter appeared to be missing.
         """
-        if _is_windows():
-            return str(prefix / "Scripts" / "python.exe")
-        return str(prefix / "bin" / "python")
+        for candidate in _interpreter_candidates(prefix):
+            if candidate.exists():
+                return str(candidate)
+        # Nothing is there. Return the location a Conda prefix uses, so the
+        # failure names the path that was expected rather than a bare "missing".
+        return str(next(iter(_interpreter_candidates(prefix))))
+
+
+def _interpreter_candidates(prefix: Path) -> tuple[Path, ...]:
+    """Where an interpreter may sit, Conda layout first."""
+    if _is_windows():
+        return (prefix / "python.exe", prefix / "Scripts" / "python.exe")
+    return (prefix / "bin" / "python", prefix / "bin" / "python3")
 
 
 @dataclass(frozen=True, slots=True)

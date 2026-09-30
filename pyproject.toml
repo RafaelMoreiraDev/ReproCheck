@@ -85,9 +85,11 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
 # Runs only where a real Conda-compatible manager is installed. Never part of
-# the default gate, because a test that silently skips is not a gate.
+# the default gate, because a test that silently skips is not a gate, and a real
+# solve needs a network and minutes of wall clock. Run with:
+#   pytest -m real_conda
 markers = [
-  "conda_integration: needs a real conda, mamba or micromamba on PATH",
+  "real_conda: needs a real conda, mamba or micromamba on PATH, and a network to solve",
 ]
 
 [tool.ruff]

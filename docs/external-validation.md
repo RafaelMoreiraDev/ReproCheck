@@ -379,5 +379,167 @@ no micro-optimisation was attempted.
 - Only `pyproject.toml`-based projects were analysed. A `setup.py`-only or
   `setup.cfg`-based distribution is a known blind spot that none of these five
   exercises.
-- The classification of "reasonable warning" and "uncertain" is a judgement of
-  one reviewer reading the evidence. It is recorded here so it can be disputed.
+  - The classification of "reasonable warning" and "uncertain" is a judgement of
+    one reviewer reading the evidence. It is recorded here so it can be disputed.
+
+## Real Conda reproduction: TASK-018 addendum
+
+TASK-016 read Conda environment files. TASK-017 added `reproduce --conda` and
+validated it **only against a fake manager**, which is a fixture someone
+remembers to keep honest. This section is the first run against a real solver,
+and it found three things the fake had been getting wrong.
+
+### The manager
+
+| Field | Value |
+| --- | --- |
+| Manager | **micromamba 2.9.0** |
+| Source | `mamba-org/micromamba-releases`, tag `2.9.0-0`, published 2026-08-07 |
+| Asset | `micromamba-win-64.exe` |
+| Published sha256 | `a6d804394b2418991c4e29562853eaace2f2ce9d9da661a98e74e02e8dbb44b0` |
+| Verified sha256 | `a6d804394b2418991c4e29562853eaace2f2ce9d9da661a98e74e02e8dbb44b0` |
+| Kept at | `C:\Projetos\ReproCheckBenchmarks\tools\micromamba\`, outside this repository |
+
+The checksum is the one published beside the binary in the same GitHub release.
+That proves the download is the artefact the publisher published, and it would
+catch truncation or a corrupted mirror. It does **not** protect against a
+compromised publisher account: the hash and the binary come from the same
+place. There is no independent signature to check here, and the distinction is
+recorded rather than glossed over.
+
+The binary ships as `micromamba-win-64.exe`; discovery looks for `micromamba`,
+so the file was copied to `micromamba.exe` with the hash unchanged. **The
+product was not pointed at the path**: the tool directory was put on the `PATH`
+of the benchmark process, which is what a user does. No local path appears in
+`src/`, and discovery code is unchanged.
+
+### Results
+
+| Project | Manager | Python | Declared | Packages | pip check | Verdict | Duration | Repo |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| minimal fixture | micromamba 2.9.0 | 3.11.16 | `=3.11` | 20 | clean | PARTIAL | 24 s | read only |
+| pip subsection | micromamba 2.9.0 | 3.11.16 | `==3.11` | 20 | clean | PARTIAL | 30 s | read only |
+| runtime, no pytest | micromamba 2.9.0 | 3.11.16 | `==3.11` | 20 | clean | PARTIAL | 31 s | read only |
+| runtime, with pytest | micromamba 2.9.0 | 3.11.16 | `==3.11` | 28 | clean | PARTIAL | 30 s | read only |
+| **tqdm** | micromamba 2.9.0 | 3.13.15 | `>=3.8` | 341 | **not clean** | PARTIAL | 1300 s | unchanged |
+| **mne-python** | micromamba 2.9.0 | 3.14.7 | `>=3.11` | 453 | clean | PARTIAL | 913 s | unchanged |
+
+Repository integrity: `tqdm` at `9cf5a12b1f955468a17f0ba3c59092b23e4258ac` and
+`mne-python` at `47d5be239f12eb310e7799b5119baf24bed89d05`, both on `master`,
+`git status --porcelain` **0 lines before and after every run**, and no diff
+against HEAD. The prefixes were created at `<workspace>/conda-env`; the projects
+themselves were only read.
+
+The network gate was proved before either solve. Both `--conda` runs without
+`--network` stopped with **RC604**, created nothing, left no prefix, took
+6 s and 145 s respectively (the difference is the static analysis of a large
+repository, not a solve), and left both repositories untouched.
+
+### Runtime checks, on a real environment
+
+| | pytest available | collection | tests executed |
+| --- | --- | --- | --- |
+| environment without pytest | no | skipped, no finding | 0 |
+| environment with pytest | yes | **186 collected** (tqdm) | **0** |
+
+`pytest --collect-only` only. No test was executed, in any run.
+
+On the Conda path the import smoke test has nothing to import: a
+`conda env create` builds the environment the file describes and **does not
+install the project into it**. The report says so in those words and lists the
+step under *Not verified*, rather than presenting an empty list as a pass.
+
+### Bugs found, and fixed generically
+
+1. **A real Conda prefix on Windows keeps `python.exe` at the prefix root**, not
+   in `Scripts`. The product assumed the virtual-environment layout, so an
+   environment that had been created **successfully**, with exit code 0, was
+   reported as a failure because the interpreter appeared to be missing. The
+   interpreter path is now probed rather than assumed. This is the worst failure
+   mode the task was looking for, and a fake built on `python -m venv` could not
+   have found it.
+2. **The import smoke test could never run on the Conda path**, because the fake
+   manager installed the project into the prefix and a real solver never does.
+   The fixture was corrected to install a non-project library instead, and the
+   report now states the real reason.
+3. **pip exits non-zero for a distribution it refuses, not only for a version
+   mismatch.** The real tqdm environment produced `wcwidth 0.9.1 is not
+   supported on this platform`. No pattern recognised it, so the report read
+   "not clean" with zero conflicts named and no finding at all. The parser now
+   knows that shape, and a failure it still cannot name says so instead of
+   claiming a conflict.
+
+Each has a regression test that fails without its fix, written from a synthetic
+fixture, with no reference to micromamba or to these two projects.
+
+### Fake versus real
+
+| | What the fake did | What really happens |
+| --- | --- | --- |
+| prefix layout | `python -m venv`, `Scripts/python.exe` | Conda layout, `python.exe` at the root, plus `conda-meta/`, `Library/`, `etc/`, `include/`, `share/`, `Tools/`, `libs/`, `DLLs/` and the runtime DLLs beside it |
+| the project | installed into the prefix | never installed |
+| `conda list --json` | a bare array | `{"log_history": [], "packages": [...]}`; a package carries `base_url`, `build_number`, `dist_name`, `md5`, `platform`, `sha256`, `url` besides the four fields the product reads |
+| `--version` | `24.11.1` | bare `2.9.0`, parsed correctly with no change |
+| the `pip:` subsection | a package simply appears | **the solver satisfies it from a channel when it can.** `packaging>=23` was installed from `conda-forge` by the solver (`conda-meta` record, `INSTALLER=conda`), not from PyPI, and the report correctly attributes it to `conda-forge` |
+| `pip check` | always either clean or a version mismatch | can also fail on a distribution pip refuses to install |
+| pytest in the prefix | copied by hand, missing `_pytest` and `py` | the solver installs the whole closure |
+
+The `packages` wrapper was already handled, so no change was needed there. A
+package installed by pip is reported by conda and mamba with `channel: pypi`,
+and a test now pins that, because flattening it into the channel found would
+claim a PyPI install came from a Conda channel.
+
+### Channels, cache and safety
+
+Channels actually contacted, read from `conda-meta` in the finished prefixes:
+
+| Project | Channels | Records |
+| --- | --- | --- |
+| tqdm | `conda-forge`, **`pkgs/main`** | 311 |
+| mne-python | `conda-forge` | 451 |
+
+`tqdm`'s `environment.yml` declares `conda-forge`, and the solve also used
+`pkgs/main`. ReproCheck passes the declared channels and adds none, so this is
+the manager's own default channel list, not a channel ReproCheck invented. It is
+recorded because a reader deciding whether a reproduction is hermetic needs to
+know that a declared-only channel set was not what happened.
+
+Cache. The package cache was redirected out of the project with
+`MAMBA_ROOT_PREFIX`, into `C:\Projetos\ReproCheckBenchmarks\tools\mamba-root\`
+(8.3 GB, 168 595 files) and no environment was created there, so no solver
+artefact lives inside this Git repository. **The repodata cache was not
+redirected**: micromamba wrote 2 164 files (12.7 MB) into
+`%LOCALAPPDATA%\conda` between 19:31 and 00:48, which is the user's own cache.
+Nothing was deleted, as promised. The report never claims the user's cache is
+untouched by a manager, because the manager wrote to it anyway.
+
+The two tqdm solves were both cold, and the second was not fast because of it:
+the first took 1300 s and the runtime-check run, which solved nothing new, took
+467 s. mne-python took 913 s. ReproCheck's own overhead is small next to that:
+the whole no-network run on mne-python, static analysis included, was 145 s.
+
+Safety. Only the two public repositories above and synthetic fixtures were
+used. No credentials were needed, none were supplied, and no secret was
+injected. The subprocess environment clears `PYTHONPATH` and sets
+`PYTHONNOUSERSITE`, so a prefix cannot import from the host. No container or
+virtual machine was available on this machine, so there was **no operating
+system isolation**: a Conda environment changes which packages are installed and
+nothing about authority. See [reproduction-safety.md](reproduction-safety.md).
+
+### What this section does not establish
+
+- Only **micromamba** was exercised. `conda` and `mamba` are supported and
+  untested against a real binary; their `--json` shapes are assumed to match.
+- Windows only. The POSIX prefix layout, and `bin/python`, are covered by unit
+  tests and by CI, not by a real solve here.
+- The `pip:` subsection was **not** observed installing from PyPI, because the
+  solver satisfied it from a channel. The `pypi` origin path is covered by a
+  synthetic test, not by evidence.
+- A timeout was never exercised. The budgets were 1800 s and 2400 s and neither
+  was reached, so how a solve that overruns is reported is untested against a
+  real manager.
+- A failed real solve is untested. Every solve attempted here succeeded, so the
+  RC602 path has no real-world evidence behind it.
+- The mne environment resolved to Python 3.14.7 and tqdm to 3.13.15, both far
+  from the versions those projects ship against. That is what their files
+  declare, and it is reported rather than corrected.

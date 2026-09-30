@@ -39,7 +39,11 @@ from reprocheck.reproduction.conda import (
     STOP_NO_MANAGER,
     STOP_NO_NETWORK,
 )
-from reprocheck.reproduction.conda_manager import MANAGERS
+from reprocheck.reproduction.conda_manager import (
+    MANAGERS,
+    CondaManager,
+    parse_package_list,
+)
 from reprocheck.reproduction.runner import reproduce
 
 FAKE_MANAGER = '''\
@@ -167,32 +171,37 @@ def write_dist_info(prefix, name, version, requires, files=()):
 
 
 def copy_package(prefix, name):
-    """Copy one installed package and its metadata into the prefix.
+    """Copy one top-level item of an installed distribution into the prefix.
 
     Used for pytest, whose absence in a bare prefix is the ordinary case and
-    which no offline mechanism can install. The venv cannot see the host's
-    pytest either, because a Conda attempt runs with ``PYTHONNOUSERSITE`` and
+    which no offline mechanism can install. The prefix cannot see the host's
+    pytest either, because a Conda attempt runs with `PYTHONNOUSERSITE` and
     the host's pytest lives in the user site directory.
+
+    What to copy is given by the fixture, not discovered here: this process
+    runs with the environment the reproduction gives it, so it cannot see the
+    very packages it is being asked to install.
     """
-    # The location is given by the fixture, not discovered: the manager runs
-    # with PYTHONNOUSERSITE set, so a pytest in the user site directory is
-    # deliberately invisible to it, exactly as it should be.
     source = PYTEST_SOURCE.get(name)
     if not source:
         return False
     source = Path(source)
-    if not source.is_dir():
+    if not source.exists():
         return False
-    package_dir = source
-    source_root = source.parent
     target_root = site_packages(prefix)
     target_root.mkdir(parents=True, exist_ok=True)
-    destination = target_root / package_dir.name
+    destination = target_root / source.name
     if not destination.exists():
-        shutil.copytree(
-            package_dir, destination, ignore=shutil.ignore_patterns("__pycache__")
-        )
-    for candidate in source_root.glob(f"{name}-*.dist-info"):
+        if source.is_dir():
+            shutil.copytree(
+                source, destination, ignore=shutil.ignore_patterns("__pycache__")
+            )
+        else:
+            # A bare module, such as the `py` that pytest imports without
+            # declaring it.
+            shutil.copy2(source, destination)
+    metadata = sorted(source.parent.glob(f"{name}-*.dist-info"))
+    for candidate in metadata:
         if not (target_root / candidate.name).exists():
             shutil.copytree(
                 candidate,
@@ -205,23 +214,31 @@ def copy_package(prefix, name):
 def create_environment(prefix):
     install_interpreter(prefix)
     if WANT_DEMO:
+        # A library that is **not** the project. `conda env create` builds the
+        # environment the file describes and never installs the project into it,
+        # and a fixture that installed the project made the import smoke test
+        # look as if it had covered something a real Conda reproduction never
+        # covers.
         if WANT_MODULE == "broken":
             # A compiled extension that cannot load is the usual real cause of a
             # failing import, and the usual real one on a machine where the
-            # project was not built.
+            # package was not built.
             write_module(
-                prefix, "demo",
-                "raise ImportError('demo needs a library that is not available')\\n",
+                prefix, "demolib",
+                "raise ImportError('demolib needs a library that is not available')\\n",
             )
         elif WANT_MODULE == "present":
-            write_module(prefix, "demo", "VALUE = 1\\n")
-        write_dist_info(prefix, "demo", "1.0.0", [], files=("demo.py",))
+            write_module(prefix, "demolib", "VALUE = 1\\n")
+        write_dist_info(prefix, "demolib", "1.0.0", [], files=("demolib.py",))
     if BROKEN_METADATA:
         name, version, requires = BROKEN_METADATA.split("|", 2)
         write_dist_info(prefix, name, version, requires.split(","))
     if WANT_PYTEST:
-        for extra in ("pytest", "pluggy", "iniconfig", "packaging"):
-            copy_package(prefix, extra)
+        # The whole dependency closure, named by the fixture: copying a hand
+        # listed few meant each new transitive import turned into a test
+        # failure that looked like a product bug.
+        for name in sorted(PYTEST_SOURCE):
+            copy_package(prefix, name)
 
 
 def flag(argv, name):
@@ -274,24 +291,60 @@ WINDOWS_SHIM = '@"{}" "{}" %*\n'
 
 
 def _package_sources() -> dict[str, str]:
-    """Where pytest and its dependencies live on the machine running the tests.
+    """Where every top-level item of pytest's dependency closure lives.
 
     Resolved by the fixture rather than by the fake manager, which runs with the
     environment the reproduction gives it and therefore cannot see the user site
-    directory where a `pip install --user` lands.
+    directory a `pip install --user` lands in.
+
+    The closure is walked from the distributions' own metadata rather than
+    written out by hand. A hand-written list meant each new transitive import
+    turned a test red and read like a product bug, and splitting a requirement
+    on the first character that looks like an operator got `pluggy<2,>=1.5`
+    wrong, so the real parser is used instead.
     """
-    import importlib.util
+    from importlib.metadata import PackageNotFoundError, distribution
+
+    from packaging.requirements import Requirement
 
     found: dict[str, str] = {}
-    for name in ("pytest", "pluggy", "iniconfig", "packaging"):
-        try:
-            spec = importlib.util.find_spec(name)
-        except (ImportError, ValueError):
+    # `py` is seeded by hand because pytest 9.1.1 imports it from
+    # _pytest/compat.py without declaring it in its metadata. It is a real
+    # dependency of the code and an absent one in the metadata, and no walk of
+    # declared requirements can discover it.
+    queue = ["pytest", "py"]
+    seen: set[str] = set()
+    while queue:
+        name = queue.pop()
+        key = name.lower().replace("_", "-")
+        if key in seen:
             continue
-        if spec is not None and spec.origin:
-            directory = Path(spec.origin).parent
-            if directory.name != "__pycache__":
-                found[name] = str(directory)
+        seen.add(key)
+        try:
+            dist = distribution(name)
+        except PackageNotFoundError:
+            continue
+        base = Path(str(dist.locate_file("")))
+        for entry in dist.files or []:
+            top = str(entry).replace("\\", "/").split("/")[0]
+            if not top or top in (".", "..") or top.startswith(".."):
+                continue
+            if top.endswith((".dist-info", ".egg-info", ".data")):
+                continue
+            if top == "__pycache__" or top.endswith(".pth"):
+                continue
+            candidate = base / top
+            # A distribution may install a bare module as well as a package;
+            # pytest's own dependency `py` is exactly that.
+            if candidate.is_dir() or candidate.suffix == ".py":
+                if candidate.exists():
+                    found[top] = str(candidate)
+        for requirement in dist.requires or []:
+            parsed = Requirement(requirement)
+            # An extra is not something a plain install pulls in.
+            if parsed.marker is not None and not parsed.marker.evaluate({"extra": ""}):
+                continue
+            queue.append(parsed.name)
     return found
 
 
@@ -362,6 +415,11 @@ def manager(tmp_path: Path):
         return directory, environment
 
     return build
+
+
+def _real_manager() -> CondaManager:
+    """A manager object, for the paths that do not involve running anything."""
+    return CondaManager(MANAGERS[2], "conda")
 
 
 @pytest.fixture
@@ -952,6 +1010,52 @@ def test_pip_check_conflicts_fail_the_attempt(
     assert report.verdict.status.name == "FAIL"
 
 
+def test_a_distribution_pip_refuses_is_named_as_a_problem(
+    manager, on_path, make_project, tmp_path
+) -> None:
+    # pip exits non-zero for a distribution it refuses to install, not only for
+    # a version mismatch. A real tqdm environment produced exactly this, and
+    # with no pattern for it the report read "not clean" with nothing named.
+    from reprocheck.reproduction.pip_check import parse_conflicts
+
+    assert parse_conflicts("wcwidth 0.9.1 is not supported on this platform") == (
+        "wcwidth 0.9.1 is not supported on this platform, so pip refuses to install it",
+    )
+
+
+def test_a_pip_check_that_failed_for_an_unknown_reason_says_so() -> None:
+    # pip can exit non-zero for something this tool has no pattern for. The
+    # reason it gives must not claim a conflict, because the output does not
+    # support one; a real tqdm environment showed how that gap reads.
+    from reprocheck.checks.verdict import _conda_partial_reasons
+    from reprocheck.reproduction.pip_check import parse_conflicts
+
+    unrecognised = "ERROR: the environment is in an unknown state"
+    assert parse_conflicts(unrecognised) == ()
+
+    reasons: list[str] = []
+    _conda_partial_reasons(
+        {},
+        {
+            "success": True,
+            "pip_check": {
+                "ran": True,
+                "clean": False,
+                "conflict_count": 0,
+                "conflicts": [],
+                "stdout_snippet": unrecognised,
+                "stderr_snippet": "",
+            },
+        },
+        reasons,
+    )
+    text = " ".join(reasons)
+
+    assert "reported conflicts" not in text
+    assert "could name as a conflict" in text
+    assert "unknown state" in text
+
+
 def test_pip_check_is_skipped_without_a_pip_subsection(
     manager, on_path, make_project, tmp_path
 ) -> None:
@@ -1002,15 +1106,27 @@ def test_runtime_checks_run_inside_the_environment(
         runtime_checks=True,
     )
     runtime = report.reproduction["runtime_checks"]
+    collection = runtime["pytest_collection"]
 
+    # Collection proves which interpreter ran it: a Conda attempt runs with
+    # PYTHONNOUSERSITE set, so a pytest on the host's user site is invisible and
+    # the only pytest that can be found is the one in the prefix.
     assert runtime["enabled"] is True
-    assert runtime["imports"], "at least one module should have been imported"
-    assert runtime["pytest_collection"]["ran"] is True
+    assert collection["available"] is True
+    assert collection["ran"] is True
+    assert collection["collected"] >= 1
+    # The project's own code is not in the environment, and is not imported.
+    assert runtime["imports"] == []
 
 
-def test_a_failing_import_is_reported(manager, on_path, make_project, tmp_path) -> None:
-    # The module exists and fails to import, which is the ordinary real cause:
-    # a compiled extension that cannot load on this machine.
+def test_the_environment_packages_are_not_imported(
+    manager, on_path, make_project, tmp_path
+) -> None:
+    # A Conda environment holds the environment's packages, not the project, so
+    # there is nothing of the project's own to import. Importing the
+    # environment's libraries instead would run third-party import-time code
+    # that the pip path never runs, and the report would then be claiming a
+    # check the user did not ask for.
     directory, environment = manager(module="broken")
     _apply(environment)
     on_path(directory)
@@ -1022,8 +1138,12 @@ def test_a_failing_import_is_reported(manager, on_path, make_project, tmp_path) 
         runtime_checks=True,
     )
 
-    assert "RC500" in conda_ids(report)
-    assert report.verdict.status.name == "FAIL"
+    assert report.reproduction["runtime_checks"]["imports"] == []
+    assert "RC500" not in conda_ids(report)
+    assert (
+        "does not contain the project"
+        in (report.reproduction["runtime_checks"]["import_discovery"])
+    )
 
 
 def test_missing_pytest_is_skipped_not_failed(
@@ -1344,17 +1464,115 @@ def test_the_project_path_with_spaces_survives(
     assert report.reproduction["conda"]["success"] is True
 
 
+def test_the_interpreter_is_found_where_a_conda_prefix_puts_it(tmp_path) -> None:
+    # A real micromamba prefix on Windows puts python.exe at the prefix root; a
+    # virtual environment puts it in Scripts. Assuming the venv layout made a
+    # real environment that had been created successfully report as a failure,
+    # because the interpreter appeared to be missing.
+    prefix = tmp_path / "conda"
+    prefix.mkdir(parents=True, exist_ok=True)
+    (prefix / "python.exe").write_bytes(b"")
+
+    found = _real_manager().python_path(prefix)
+
+    assert found == str(prefix / "python.exe")
+    assert Path(found).exists()
+
+
+def test_a_virtual_environment_shaped_prefix_still_resolves(tmp_path) -> None:
+    prefix = tmp_path / "venv"
+    (prefix / "Scripts").mkdir(parents=True, exist_ok=True)
+    (prefix / "Scripts" / "python.exe").write_bytes(b"")
+
+    assert _real_manager().python_path(prefix) == str(prefix / "Scripts" / "python.exe")
+
+
+def test_a_missing_interpreter_names_the_path_that_was_expected(tmp_path) -> None:
+    prefix = tmp_path / "empty"
+    prefix.mkdir(parents=True, exist_ok=True)
+
+    expected = _real_manager().python_path(prefix)
+
+    assert expected == str(prefix / "python.exe")
+    assert not Path(expected).exists()
+
+
+def test_a_conda_import_check_says_why_there_is_nothing_to_import(
+    manager, on_path, make_project, tmp_path
+) -> None:
+    # A Conda environment does not contain the project, so the import smoke
+    # test has nothing to import. Reported as "distribution not installed", that
+    # reads as a project that failed to install, which is a different claim.
+    directory, environment = manager()
+    _apply(environment)
+    on_path(directory)
+
+    report = run_conda(
+        conda_project(make_project),
+        base_dir=tmp_path,
+        network=True,
+        runtime_checks=True,
+    )
+    runtime = report.reproduction["runtime_checks"]
+
+    assert runtime["imports"] == []
+    assert "does not contain the project" in runtime["import_discovery"]
+    assert "not installed" not in runtime["import_discovery"]
+
+
+def test_the_package_list_accepts_the_shape_a_real_manager_prints(manager) -> None:
+    # micromamba prints {"log_history": [], "packages": [...]}, conda an object
+    # of the same name. A third manager that printed a bare array is accepted
+    # too, because dropping a real package would understate what was installed.
+    real = json.dumps(
+        {
+            "log_history": [],
+            "packages": [
+                {
+                    "name": "python",
+                    "version": "3.11.16",
+                    "build_string": "hb12b558_2_cpython",
+                    "build_number": 2,
+                    "channel": "conda-forge",
+                    "base_url": "https://conda.anaconda.org/conda-forge",
+                    "dist_name": "python-3.11.16-hb12b558_2_cpython",
+                    "md5": "253b0adaeefbea921fe6982124be0e64",
+                    "platform": "win-64",
+                    "sha256": "f8c7ba41d2bafe4b9f0be3f8f13a399dae76f5b83e679f63d86a26e8527f7c7a",
+                    "url": "https://conda.anaconda.org/conda-forge/win-64/python-3.11.16-hb12b558_2_cpython.conda",
+                }
+            ],
+        }
+    )
+    parsed = parse_package_list(real)
+
+    assert len(parsed) == 1
+    assert parsed[0].name == "python"
+    assert parsed[0].version == "3.11.16"
+    assert parsed[0].build == "hb12b558_2_cpython"
+    assert parsed[0].channel == "conda-forge"
+
+
+def test_a_pypi_origin_channel_is_kept_when_a_manager_reports_one() -> None:
+    # conda and mamba report a pip-installed package with channel "pypi". If the
+    # tool flattened that into the channel it found, the report would claim a
+    # PyPI install came from conda-forge.
+    parsed = parse_package_list(
+        json.dumps([{"name": "requests", "version": "2.32.3", "channel": "pypi"}])
+    )
+
+    assert parsed[0].channel == "pypi"
+
+
 def test_the_python_path_follows_the_platform(manager) -> None:
     """The layout is different on the two platforms and must not be guessed."""
-    from reprocheck.reproduction.conda_manager import CondaManager
-
-    manager_object = CondaManager(MANAGERS[2], "conda")
-    path = manager_object.python_path(Path("/prefix"))
+    path = _real_manager().python_path(Path("/prefix"))
 
     if os.name == "nt":
-        assert path.endswith("Scripts\\python.exe") or path.endswith(
-            "Scripts/python.exe"
-        )
+        # A Conda prefix on Windows, verified against micromamba 2.9.0: the
+        # interpreter sits at the prefix root, not in Scripts.
+        assert path.endswith("python.exe")
+        assert "Scripts" not in path
     else:
         assert path.endswith("bin/python")
 
@@ -1392,20 +1610,30 @@ def test_no_socket_is_opened_by_the_conda_path(make_project, tmp_path) -> None:
 # --------------------------------------------------------------------------- #
 # 17. optional real-manager integration
 # --------------------------------------------------------------------------- #
+#
+# Everything above runs against a fake manager, and a fake can only be as
+# faithful as someone remembered to make it. TASK-018 found three ways it was
+# not: a Conda prefix on Windows keeps python.exe at the root, a real
+# environment does not contain the project, and pip can refuse a distribution
+# without naming a version mismatch. These tests run where a real manager
+# exists, and are never part of the default gate.
 
 
-@pytest.mark.conda_integration
-@pytest.mark.skipif(
-    not any(
-        (Path(directory) / name).exists()
-        for directory in os.environ.get("PATH", "").split(os.pathsep)
-        if directory
-        for name in ("conda", "mamba", "micromamba")
-    ),
+def _real_manager_available() -> bool:
+    from reprocheck.reproduction.conda_manager import CondaManager
+
+    return bool(CondaManager.discover())
+
+
+requires_manager = pytest.mark.skipif(
+    not _real_manager_available(),
     reason="no Conda-compatible manager is installed on this machine",
 )
+
+
+@pytest.mark.real_conda
+@requires_manager
 def test_real_manager_can_report_its_version(tmp_path) -> None:
-    """Only runs where a real manager exists; never part of the default gate."""
     from reprocheck.reproduction.conda_manager import CondaManager
 
     manager_object = CondaManager.discover()
@@ -1413,6 +1641,113 @@ def test_real_manager_can_report_its_version(tmp_path) -> None:
     workspace = ws.create_workspace(tmp_path)
 
     assert manager_object.read_version(workspace, dict(os.environ))
+
+
+@pytest.mark.real_conda
+@requires_manager
+def test_a_real_environment_is_created_and_read(tmp_path) -> None:
+    """A real solve, end to end. Needs a network and about a minute."""
+    from reprocheck.reproduction.conda_manager import CondaManager
+
+    manager_object = CondaManager.discover()
+    assert manager_object
+    project = tmp_path / "smoke"
+    (project / "tests").mkdir(parents=True)
+    (project / "environment.yml").write_text(
+        "name: reprocheck-conda-smoke\n"
+        "channels:\n"
+        "  - conda-forge\n"
+        "dependencies:\n"
+        f"  - python={INTERPRETER_SERIES}\n"
+        "  - pip\n",
+        encoding="utf-8",
+    )
+    (project / "pyproject.toml").write_text(
+        f'[project]\nname = "smoke"\nversion = "1.0.0"\n'
+        f'requires-python = ">={INTERPRETER_SERIES}"\n',
+        encoding="utf-8",
+    )
+    (project / "tests" / "test_smoke.py").write_text(
+        "def test_ok():\n    assert True\n", encoding="utf-8"
+    )
+
+    report = reproduce(
+        project,
+        base_dir=tmp_path / "work",
+        conda=True,
+        network=True,
+        keep_workspace=True,
+        timeout=1800,
+    )
+    attempt = report.reproduction["conda"]
+
+    assert attempt["manager"] == manager_object.name
+    assert attempt["manager_version"]
+    assert attempt["success"] is True, attempt.get("error")
+    assert attempt["exit_code"] == 0
+    assert attempt["package_count"] > 0
+    assert attempt["package_list_partial"] is False
+    python = attempt["python"]
+    assert python["version"]
+    assert python["path"]
+    # The interpreter it named is a real file, at the place a real prefix puts
+    # it, and not inside the analysed project.
+    assert Path(python["path"]).exists()
+    assert not str(python["path"]).startswith(str(project))
+    # The project itself is only ever read.
+    assert sorted(p.name for p in project.iterdir()) == [
+        "environment.yml",
+        "pyproject.toml",
+        "tests",
+    ]
+
+
+@pytest.mark.real_conda
+@requires_manager
+def test_a_real_environment_collects_tests_without_running_them(tmp_path) -> None:
+    from reprocheck.reproduction.conda_manager import CondaManager
+
+    manager_object = CondaManager.discover()
+    assert manager_object
+    project = tmp_path / "collected"
+    (project / "tests").mkdir(parents=True)
+    (project / "environment.yml").write_text(
+        "name: reprocheck-conda-collect\n"
+        "channels:\n"
+        "  - conda-forge\n"
+        "dependencies:\n"
+        f"  - python={INTERPRETER_SERIES}\n"
+        "  - pip\n"
+        "  - pytest\n",
+        encoding="utf-8",
+    )
+    (project / "pyproject.toml").write_text(
+        f'[project]\nname = "collected"\nversion = "1.0.0"\n'
+        f'requires-python = ">={INTERPRETER_SERIES}"\n',
+        encoding="utf-8",
+    )
+    (project / "tests" / "test_collected.py").write_text(
+        "def test_ok():\n    assert True\n", encoding="utf-8"
+    )
+
+    report = reproduce(
+        project,
+        base_dir=tmp_path / "work",
+        conda=True,
+        network=True,
+        runtime_checks=True,
+        keep_workspace=True,
+        timeout=1800,
+    )
+    collection = report.reproduction["runtime_checks"]["pytest_collection"]
+
+    assert collection["available"] is True
+    assert collection["ran"] is True
+    assert collection["success"] is True
+    assert (collection["collected"] or 0) >= 1
+    # A Conda environment holds the environment's packages, not the project, so
+    # there is nothing of the project's own to import and the report says so.
+    assert report.reproduction["runtime_checks"]["imports"] == []
 
 
 def _apply(environment: dict[str, str]) -> None:

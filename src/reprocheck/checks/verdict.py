@@ -164,7 +164,22 @@ def _conda_partial_reasons(
             "metadata consistency check was possible"
         )
     elif not pip.get("clean"):
-        reasons.append("pip check reported conflicts inside the environment")
+        conflicts = pip.get("conflict_count") or 0
+        if conflicts:
+            reasons.append("pip check reported conflicts inside the environment")
+        else:
+            # pip exited non-zero without a message the parser recognises. It
+            # still failed, and saying "conflicts" would be a claim the output
+            # does not support; a real environment produced exactly this, with
+            # a distribution pip refuses rather than a version mismatch.
+            snippet = (
+                pip.get("stdout_snippet") or pip.get("stderr_snippet") or ""
+            ).strip()
+            reasons.append(
+                "pip check did not pass inside the environment and reported "
+                "nothing this tool could name as a conflict"
+                + (f": {snippet}" if snippet else "")
+            )
 
     runtime = reproduction.get("runtime_checks") or {}
     if not runtime.get("enabled"):
