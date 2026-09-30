@@ -1762,6 +1762,68 @@ def test_a_real_environment_collects_tests_without_running_them(tmp_path) -> Non
     assert report.reproduction["runtime_checks"]["imports"] == []
 
 
+def test_the_collected_count_survives_a_project_that_configures_itself_quiet(
+    tmp_path,
+) -> None:
+    """A count read only from pytest's summary line is a count that can vanish.
+
+    ``addopts = "-q"`` in a project's own ``pyproject.toml`` stacks with the
+    ``-q`` this tool passes, and the output drops to bare node ids with no
+    summary. The first real_conda run on a runner found this: pytest exited 0,
+    had collected a test, and the report said ``collected: null``. A user
+    reading that cannot tell an empty project from a quiet one.
+    """
+    from reprocheck.reproduction.runtime import _parse_collected
+
+    # The exact shape the runner produced, captured from its artifact.
+    quiet = (
+        "conda-logs/x/work/reprocheck/20260930-210537/source/tests/test_collected.py: 1"
+    )
+    assert _parse_collected(quiet) == 1
+
+    # Several files, still no summary.
+    assert _parse_collected("a/test_a.py: 3\na/test_b.py: 2") == 5
+
+    # One node id per test, which is the other quiet form.
+    assert _parse_collected("a/test_a.py::test_one\na/test_b.py::test_two") == 2
+
+    # The summary line still wins, because it is the authoritative answer.
+    assert _parse_collected("a/test_a.py: 3\n\n3 tests collected in 0.01s") == 3
+
+    # And nothing collected is still honestly unknown rather than a zero that
+    # reads like a measurement.
+    assert _parse_collected("no tests ran in 0.01s") is None
+    assert _parse_collected("") is None
+
+
+def test_a_quiet_collection_is_reported_as_a_number_in_the_report(
+    manager, on_path, make_project, tmp_path
+) -> None:
+    # The same thing end to end, through the report rather than the parser, so
+    # the number a user reads is the one that got recovered.
+    from reprocheck.reproduction import runtime
+
+    directory, environment = manager(pytest=True)
+    _apply(environment)
+    on_path(directory)
+
+    report = run_conda(
+        conda_project(make_project),
+        base_dir=tmp_path,
+        network=True,
+        runtime_checks=True,
+    )
+    collection = report.reproduction["runtime_checks"]["pytest_collection"]
+
+    assert collection["ran"] is True
+    assert isinstance(collection["collected"], int)
+    assert collection["collected"] >= 1
+
+    # The helper is the only place that reads the number, so asserting on it
+    # covers the parse the report depends on.
+    assert runtime._parse_collected("a/test_a.py: 1") == 1
+
+
 def _apply(environment: dict[str, str]) -> None:
     for key, value in environment.items():
         os.environ[key] = value

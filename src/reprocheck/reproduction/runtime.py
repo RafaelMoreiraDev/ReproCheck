@@ -66,6 +66,9 @@ _NON_PACKAGE_TOPLEVEL = frozenset(
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _COLLECTED_RE = re.compile(r"(\d+)\s+tests? collected", re.IGNORECASE)
+#: ``.../tests/test_mod.py: 3``, which is what ``--collect-only -q`` prints once
+#: the verbosity has been lowered past the summary line.
+_PER_FILE_RE = re.compile(r"^(?P<path>\S+\.py):\s+(?P<count>\d+)\s*$")
 
 # Versions a build backend falls back to when it cannot compute a real one.
 _FALLBACK_VERSIONS = frozenset({"0.0.0", "0.0.1", "0.1.dev0", "0.0.0.post0"})
@@ -122,8 +125,6 @@ import importlib.util, json
 
 print(json.dumps({"available": importlib.util.find_spec("pytest") is not None}))
 """
-
-_COLLECTED_RE = re.compile(r"(\d+)\s+tests? collected", re.IGNORECASE)
 
 
 def interpreter(workspace: Workspace, python: str | None = None) -> str:
@@ -299,8 +300,37 @@ def collect_tests(
 
 
 def _parse_collected(output: str) -> int | None:
+    """How many tests pytest collected, or ``None`` when it did not say.
+
+    The summary line is the authoritative answer, so it is used when present.
+    Without it the count is recovered from the listing itself, because
+    ``addopts = "-q"`` in a project's own ``pyproject.toml`` stacks with the
+    ``-q`` this tool passes and takes the output down to bare node ids, and a
+    project that quietly configures itself quieter was reported as having
+    collected nothing at all. A number recovered this way is a floor, not a
+    guess at a total.
+    """
     match = _COLLECTED_RE.search(output)
-    return int(match.group(1)) if match else None
+    if match:
+        return int(match.group(1))
+
+    counted: list[int] = []
+    node_ids = 0
+    for raw in output.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # ``.../test_mod.py: 3``, one line per file, then the number in it.
+        per_file = _PER_FILE_RE.match(line)
+        if per_file:
+            counted.append(int(per_file.group("count")))
+            continue
+        # ``.../test_mod.py::test_name``, one line per collected test.
+        if "::" in line and not line.startswith(("=", "-")):
+            node_ids += 1
+    if counted:
+        return sum(counted)
+    return node_ids or None
 
 
 def _read_json(*paths: str | None) -> dict:
