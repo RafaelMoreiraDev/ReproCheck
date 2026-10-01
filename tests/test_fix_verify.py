@@ -92,6 +92,25 @@ def _apply_verify(root: Path, suggestion: str = RC140):
     return run_fix(root, suggestion, apply=True, verify=True)
 
 
+def _proposed_bytes(root: Path) -> bytes:
+    """The bytes the RC140 suggestion proposes for the file as it is now.
+
+    Read from the suggestion engine rather than written out here, because the
+    engine keeps the line endings of the file it read and a literal in a test
+    pins the platform instead of the behaviour.
+    """
+    from reprocheck.scanner import build_report, collect_facts
+    from reprocheck.suggest import suggest
+
+    report = build_report(collect_facts(root))
+    chosen = next(
+        item
+        for item in suggest(collect_facts(root), report).suggestions
+        if item.suggestion_id == RC140
+    )
+    return str(chosen.after).encode("utf-8")
+
+
 def _check(result, name: str):
     return next(item for item in result.verification.checks if item.name == name)
 
@@ -388,6 +407,9 @@ def test_an_unrelated_new_warning_is_not_a_regression(
     _state(tmp_path, monkeypatch)
     root = _project(make_project)
     before = (root / ".gitignore").read_bytes()
+    # Captured while the finding still exists, which is the only moment the
+    # suggestion can be asked what it would write.
+    proposed = _proposed_bytes(root)
 
     original = fix_apply.build_report
 
@@ -423,7 +445,11 @@ def test_an_unrelated_new_warning_is_not_a_regression(
     assert result.status is ApplicationStatus.APPLIED
     assert result.verification.added  # it was noticed and not treated as fatal
     assert result.verification.regressions == ()
-    assert (root / ".gitignore").read_bytes() == COMPLETE_IGNORE_CRLF
+    # Compared against what the suggestion proposed, not a literal: the rule
+    # keeps the line endings of the file it read, so the bytes are CRLF on
+    # Windows and LF on Linux, and a test that hardcodes either one is testing
+    # the platform.
+    assert (root / ".gitignore").read_bytes() == proposed
     assert (root / ".gitignore").read_bytes() != before
 
 
@@ -719,7 +745,19 @@ def test_a_dirty_git_working_tree_is_not_a_reason_to_refuse(
     root = _project(make_project)
     run_git(root, "init")
     run_git(root, "add", "-A")
-    run_git(root, "commit", "-m", "initial")
+    # The identity is supplied per command: a CI runner has no user.name or
+    # user.email configured, and a commit that fails for want of one has
+    # nothing to do with what this test is about.
+    run_git(
+        root,
+        "-c",
+        "user.email=tests@example.invalid",
+        "-c",
+        "user.name=ReproCheck tests",
+        "commit",
+        "-m",
+        "initial",
+    )
     # The user's own uncommitted work, on another file.
     (root / "README.md").write_text("# mine, uncommitted\n", "utf-8")
     run_git(root, "add", "README.md")
