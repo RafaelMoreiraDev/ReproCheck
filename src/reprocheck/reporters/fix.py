@@ -23,6 +23,10 @@ STATUS_MEANING = {
     ApplicationStatus.FAILED: "The operation failed.",
     ApplicationStatus.ROLLED_BACK: "The change was reverted; the file is as it was.",
     ApplicationStatus.ROLLBACK_FAILED: "The change could not be reverted. This is a ReproCheck error.",
+    ApplicationStatus.VERIFICATION_FAILED: (
+        "The change was written, the verification did not hold, and it was "
+        "reverted automatically. The file is as it was."
+    ),
 }
 
 
@@ -55,6 +59,7 @@ def render_fix_markdown(result: FixApplicationResult) -> str:
         _precondition(result),
         _change(result),
         _validation(result),
+        _verification(result),
         _git(result),
         _recovery(result),
         _technical(result),
@@ -136,6 +141,79 @@ def _validation(result: FixApplicationResult) -> str:
     ]
     if validation.detail:
         lines.extend(["", validation.detail])
+    return "\n".join(lines)
+
+
+def _verification(result: FixApplicationResult) -> str:
+    """The post-fix verification, as a section of its own.
+
+    Present whenever it ran, and present as "not attempted" with a reason when
+    it did not. A section that silently disappears reads as a check that passed,
+    and "was the verification run?" is the first question a reader of a fix
+    report should be able to answer.
+    """
+    verification = result.verification
+    if not verification.attempted:
+        reason = verification.not_attempted_reason or "not_requested"
+        return "\n".join(
+            [
+                "## Verification",
+                "",
+                "- Attempted: no",
+                f"- Reason: `{reason}`",
+                "",
+                "No project was compared before and after, because nothing was "
+                "written to compare.",
+            ]
+            if reason == "dry_run"
+            else [
+                "## Verification",
+                "",
+                "- Attempted: no",
+                "- Reason: `--verify` was not given",
+                "",
+                "Without `--verify` the post-fix state is not compared. The "
+                "finding is re-scanned either way; `--verify` adds the target "
+                "identity, the regression and the integrity checks.",
+            ]
+        )
+
+    lines = [
+        "## Verification",
+        "",
+        "- Attempted: yes",
+        f"- Result: **{'PASS' if verification.success else 'FAIL'}**",
+        f"- Target finding: {verification.target_finding_id or '-'}",
+        f"- Target resolved: {'yes' if verification.target_after == 0 and verification.target_before else 'no'}",
+        f"- Findings before: {verification.findings_before}, "
+        f"after: {verification.findings_after}",
+        f"- Removed findings: {len(verification.removed)}",
+        f"- Added findings: {len(verification.added)}",
+        f"- Regressions: {len(verification.regressions)}",
+    ]
+    if verification.duration_seconds is not None:
+        lines.append(f"- Duration: {verification.duration_seconds}s")
+    lines.extend(["", "### Checks", ""])
+    for check in verification.checks:
+        mark = "pass" if check.passed else "FAIL"
+        suffix = f" — {check.detail}" if check.detail else ""
+        lines.append(f"- `{check.name}`: **{mark}**{suffix}")
+    if verification.regressions:
+        lines.extend(["", "### Regressions", ""])
+        lines.extend(f"- {item}" for item in verification.regressions)
+    if verification.removed:
+        lines.extend(["", "### Resolved", ""])
+        lines.extend(f"- `{item}`" for item in verification.removed)
+    if verification.added:
+        lines.extend(["", "### New", ""])
+        lines.extend(f"- `{item}`" for item in verification.added)
+    lines.extend(
+        [
+            "",
+            "The comparison is a static re-scan. It does not run the project's "
+            "tests and does not execute project code.",
+        ]
+    )
     return "\n".join(lines)
 
 

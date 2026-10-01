@@ -35,10 +35,12 @@ from reprocheck.fix.models import (
     ApplicationRecord,
     ApplicationStatus,
     FixApplicationResult,
+    FixVerification,
     RollbackState,
     Validation,
     utc_now,
 )
+from reprocheck.fix.verify import diff_paths, snapshot_project, verify_application
 from reprocheck.output import project_identity, project_output_dir
 from reprocheck.scanner import build_report, collect_facts, resolve_target
 from reprocheck.suggest import Safety, suggest
@@ -71,12 +73,20 @@ def run_fix(
     suggestion_id: str,
     *,
     apply: bool = False,
+    verify: bool = False,
     state_dir: Path | None = None,
 ) -> FixApplicationResult:
-    """Show, or apply, exactly one suggestion. Dry run unless ``apply``."""
+    """Show, or apply, exactly one suggestion. Dry run unless ``apply``.
+
+    ``verify`` is meaningful only with ``apply`` and is the caller's
+    responsibility to enforce: nothing was written in a dry run, so there is
+    nothing to verify. It asks for a post-fix comparison, which re-scans
+    statically and never runs the project's own code.
+    """
     root = resolve_target(project)
     facts = collect_facts(root)
     report = build_report(facts)
+    before_report = report.to_dict()
     proposals = suggest(facts, report)
     base = dict(
         reprocheck_version=__version__,
@@ -150,6 +160,9 @@ def run_fix(
             status=ApplicationStatus.DRY_RUN,
             reason="dry run: no file was written. Add --apply to write it",
             messages=tuple([*messages, "No files were modified."]),
+            # Said rather than left as a default, because a report that omits the
+            # block reads as if the question was never asked.
+            verification=FixVerification(not_attempted_reason="dry_run"),
             **identified,  # type: ignore[arg-type]
         )
 
@@ -175,6 +188,8 @@ def run_fix(
         messages=messages,
         identified=identified,
         state_dir=state_dir,
+        before_report=before_report,
+        verify=verify,
     )
 
 
@@ -323,10 +338,15 @@ def _apply_now(
     messages: list[str],
     identified: dict,
     state_dir: Path | None,
+    before_report: dict,
+    verify: bool,
 ) -> FixApplicationResult:
     after_bytes = str(suggestion.after).encode("utf-8")
     record_id = _record_id(suggestion.suggestion_id)
     backup = _backup_path(root, record_id, state_dir=state_dir)
+    # Taken before the write, and only when asked for. Hashing a whole project
+    # twice is not something a command should do by default.
+    before_snapshot = snapshot_project(root) if verify else None
     try:
         _write_backup(backup, current)
     except OSError as exc:
@@ -345,8 +365,13 @@ def _apply_now(
                 "the file on disk does not match the proposed content "
                 f"(expected {suggestion.after_sha256}, found {sha256(written)})"
             )
-        resolved, count, detail = _rescan(root, suggestion.finding_id)
-        if not resolved:
+        after_report, resolved, count, detail = _rescan(root, suggestion.finding_id)
+        # With ``--verify`` the target question belongs to the verification,
+        # which reports it and drives the one rollback. Raising here instead
+        # would revert the bytes before anything could be said about why, and
+        # the report would claim a plain write failure for a verification
+        # result the user asked for.
+        if not resolved and not verify:
             raise FixError(
                 f"{suggestion.finding_id} is still reported after the write: {detail}"
             )
@@ -367,18 +392,55 @@ def _apply_now(
 
     git_after = git_observer.observe(root, target=str(suggestion.file))
     unexpected = _unexpected_paths(git_before, git_after, str(suggestion.file))
+
+    if verify:
+        allowed = diff_paths(suggestion.unified_diff, str(suggestion.file))
+        verification = verify_application(
+            root=root,
+            before=before_report,
+            after=after_report,
+            target_file=str(suggestion.file),
+            target_finding_id=str(suggestion.finding_id),
+            expected_sha256=str(suggestion.after_sha256),
+            allowed_paths=allowed,
+            before_snapshot=before_snapshot,
+            after_snapshot=snapshot_project(root),
+        )
+        if not verification.success:
+            return _rollback_after_failed_verification(
+                root=root,
+                target=target,
+                original=current,
+                suggestion=suggestion,
+                messages=messages,
+                identified=identified,
+                record_id=record_id,
+                backup=backup,
+                state_dir=state_dir,
+                verification=verification,
+            )
+
     result = FixApplicationResult(
         status=ApplicationStatus.APPLIED,
-        reason="the proposed content was written and validated",
+        reason=(
+            "the proposed content was written and the post-fix verification held"
+            if verify
+            else "the proposed content was written and validated"
+        ),
         applied=True,
         validation=Validation(
             performed=True,
             after_hash_matches=True,
-            finding_resolved=True,
+            finding_resolved=resolved,
             detail=(
                 f"the file matches {suggestion.after_sha256} and "
                 f"{suggestion.finding_id} is no longer reported"
             ),
+        ),
+        verification=(
+            verification
+            if verify
+            else FixVerification(not_attempted_reason="not_requested")
         ),
         backup_path=str(backup),
         record_id=record_id,
@@ -404,6 +466,75 @@ def _apply_now(
     return _record(result, root, suggestion, record_id, backup, state_dir)
 
 
+def _rollback_after_failed_verification(
+    *,
+    root: Path,
+    target: Path,
+    original: bytes,
+    suggestion,
+    messages: list[str],
+    identified: dict,
+    record_id: str,
+    backup: Path,
+    state_dir: Path | None,
+    verification: FixVerification,
+) -> FixApplicationResult:
+    """Undo a write whose verification did not hold, unless that is unsafe.
+
+    A blind restore would be the worst outcome available here: something else
+    may have written to the file between the fix and the verification, and
+    putting the old bytes back would destroy that work without saying so. The
+    hash is checked first, and when it does not match, the change is left alone
+    and the report says where the backup is.
+    """
+    expected_after = str(suggestion.after_sha256)
+    on_disk = sha256(_read_bytes(target)) if target.is_file() else ""
+    if on_disk != expected_after:
+        return _finalise_failure(
+            root=root,
+            suggestion=suggestion,
+            identified=identified,
+            record_id=record_id,
+            backup=backup,
+            state_dir=state_dir,
+            reason=(
+                "the verification did not hold and the file has since been "
+                f"written by something else, so the change was left in place "
+                f"rather than overwriting work done since. The original bytes "
+                f"are at {backup}"
+            ),
+            rollback=RollbackState.SKIPPED_STALE,
+            verification=verification,
+            messages=[
+                *messages,
+                "The file was NOT reverted: something else wrote to it after the "
+                f"fix, and the backup is kept at {backup}.",
+            ],
+        )
+
+    failed = [check for check in verification.checks if not check.passed]
+    detail = "; ".join(f"{check.name}: {check.detail}" for check in failed)
+    return _restore(
+        root=root,
+        target=target,
+        original=original,
+        expected=str(suggestion.before_sha256),
+        reason=f"the post-fix verification did not hold. {detail}",
+        messages=[
+            *messages,
+            "The change was reverted automatically: the file is back to its "
+            "previous content.",
+        ],
+        identified=identified,
+        record_id=record_id,
+        backup=backup,
+        state_dir=state_dir,
+        suggestion=suggestion,
+        verification=verification,
+        status=ApplicationStatus.VERIFICATION_FAILED,
+    )
+
+
 def _restore(
     *,
     root: Path,
@@ -417,8 +548,11 @@ def _restore(
     backup: Path,
     state_dir: Path | None,
     suggestion,
+    verification: FixVerification | None = None,
+    status: ApplicationStatus | None = None,
 ) -> FixApplicationResult:
     """Put the original bytes back and say plainly whether it worked."""
+    verify = verification or FixVerification(not_attempted_reason="not_requested")
     try:
         _atomic_write(target, original)
     except OSError as exc:  # pragma: no cover - depends on the filesystem
@@ -431,6 +565,7 @@ def _restore(
             state_dir=state_dir,
             reason=f"{reason}; the rollback also failed: {exc}",
             rollback=RollbackState.FAILED,
+            verification=verify,
             messages=[
                 *messages,
                 "This is a severe ReproCheck error: the file may differ from "
@@ -451,6 +586,7 @@ def _restore(
                 f"the original bytes"
             ),
             rollback=RollbackState.FAILED,
+            verification=verify,
             messages=[
                 *messages,
                 "This is a severe ReproCheck error: the backup is kept.",
@@ -465,6 +601,8 @@ def _restore(
         state_dir=state_dir,
         reason=reason,
         rollback=RollbackState.SUCCEEDED,
+        verification=verify,
+        status=status,
         messages=[
             *messages,
             "The change was reverted: the file is back to its previous content.",
@@ -483,12 +621,15 @@ def _finalise_failure(
     reason: str,
     rollback: RollbackState,
     messages: list[str],
+    verification: FixVerification | None = None,
+    status: ApplicationStatus | None = None,
 ) -> FixApplicationResult:
-    status = (
-        ApplicationStatus.ROLLBACK_FAILED
-        if rollback is RollbackState.FAILED
-        else ApplicationStatus.ROLLED_BACK
-    )
+    if status is None:
+        status = (
+            ApplicationStatus.ROLLBACK_FAILED
+            if rollback is RollbackState.FAILED
+            else ApplicationStatus.ROLLED_BACK
+        )
     result = FixApplicationResult(
         status=status,
         reason=reason,
@@ -498,6 +639,8 @@ def _finalise_failure(
         backup_path=str(backup),
         record_id=record_id,
         validation=Validation(performed=True, detail=reason),
+        verification=verification
+        or FixVerification(not_attempted_reason="not_requested"),
         git_after=git_observer.observe(root, target=str(suggestion.file)),
         messages=tuple(messages),
         **identified,  # type: ignore[arg-type]
@@ -535,18 +678,24 @@ def _record(
         status=result.status,
         reason=result.reason,
         rollback_reason=result.rollback_reason,
+        verification=result.verification,
     )
     path = write_record(record, root, state_dir=state_dir)
     return replace(result, record_path=str(path))
 
 
-def _rescan(root: Path, finding_id: str) -> tuple[bool, int, str]:
-    """Re-scan statically: the finding must be gone after the write."""
+def _rescan(root: Path, finding_id: str) -> tuple[dict, bool, int, str]:
+    """Re-scan statically: the finding must be gone after the write.
+
+    The report travels with the answer so a `--verify` comparison can reuse it
+    instead of scanning the project a third time.
+    """
     report = build_report(collect_facts(root))
+    document = report.to_dict()
     remaining = [item for item in report.findings if item.id == finding_id]
     if remaining:
-        return False, len(report.findings), remaining[0].message
-    return True, len(report.findings), "the finding is no longer reported"
+        return document, False, len(report.findings), remaining[0].message
+    return document, True, len(report.findings), "the finding is no longer reported"
 
 
 def _unexpected_paths(before, after, target: str) -> tuple[str, ...]:

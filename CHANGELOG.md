@@ -6,6 +6,78 @@ All notable changes to ReproCheck are recorded here. The format follows
 
 ## [Unreleased] — 2026-09-30
 
+Post-fix verification. **No version bump, no tag, no publication**: the published
+version is still `0.11.0b3`.
+
+### Added
+
+- **`reprocheck fix <path> --suggestion <id> --apply --verify`.** After writing,
+  the project is re-scanned and four questions are asked and named in the
+  report: `target-resolved`, `content-intact`, `no-regressions` and
+  `project-integrity`. Any failure **reverts the change automatically** and
+  exits non-zero, so a fix that did not hold never sits silently in the project.
+- **The target is matched by identity, not by a count.** The findings present
+  before and after are compared through the same normalisation the baseline
+  comparison uses, with line numbers removed: a count that fell says nothing
+  about which finding went, and a line that moved is not a new finding. This
+  matters in practice, because the evidence of most rules is a `path:line`.
+- **Regressions are three specific things**: a new error, a new finding attributed
+  to the file the fix changed, and a new RC220 or RC221. A new unrelated warning
+  is reported as new and is not a reason to revert somebody's work.
+- **`--verify` requires `--apply`** and is refused without it, because a dry run
+  writes nothing and there is nothing to compare. A dry run and a plain `--apply`
+  both say in the report that the verification was not attempted, and why.
+- **A structured `verification` block** in the fix JSON, in the Markdown and in
+  the audit record: attempted, success, target resolved, findings before and
+  after, removed, added, regressions, the named checks and a duration.
+- **A project fingerprint, not Git.** Integrity is checked against a content
+  hash of the project taken before and after, so a project need not be a
+  repository and a dirty working tree is a normal state to fix in. Git is still
+  observed when present, and the user's own uncommitted work is never reverted.
+
+### Changed
+
+- Exit codes are unchanged, deliberately. A verification that fails and reverts
+  returns **6**, the code that already meant "the operation did not stick and
+  the project is as it was", and a rollback that itself fails returns **7**. A
+  new code would have told a script nothing it can act on. A new status,
+  `VERIFICATION_FAILED`, separates the case in the record without inventing an
+  exit code, and without reusing the plain `ROLLED_BACK`, which means the user
+  asked for a rollback and it worked.
+- The safe rollback is now **guarded**: if the target file was written by
+  something else between the fix and the verification, the change is left in
+  place, `SKIPPED_STALE` is recorded, and the report says where the backup is.
+  Overwriting work that is not ours is the worst outcome available there.
+
+### Not changed, deliberately
+
+- **`--verify` does not run the project's tests, import its modules, install
+  anything or touch the network.** It is a static comparison and the report says
+  so. Executing project code is a different command with different risks and a
+  different consent story.
+- **No new exit code**, and no change to what `fix` does without `--verify`.
+- **`--verify` changes nothing about who may be applied.** A `REVIEW_REQUIRED`
+  or `MANUAL_ONLY` suggestion is still refused.
+
+### Verified
+
+- 798 tests, 0 failures. The 39 verification tests reach the failure modes
+  through the production pipeline: the write, the atomic replace, the backup, the
+  rescan, the comparison, the fingerprint and the rollback all run for real, and
+  a test hooks only the rescan to introduce one specific fact.
+- **The tests bite.** Eight mutations of the verification logic were each killed
+  by a named test: the target check forced to pass, a new error ignored, a new
+  RC220 ignored, the integrity check skipped, the content hash comparison
+  loosened, the verdict ignoring its own checks, the guarded rollback forced, and
+  line numbers starting to count. Both mutated files were restored byte for byte
+  afterwards.
+- `--verify` was run against copies of **tqdm**, **pint** and **mne-python**:
+  each resolved its target, introduced no regression, touched only its
+  `.gitignore`, restored its original bytes on rollback, and left the permanent
+  clone untouched at the same HEAD with an empty `git status`.
+
+## [Unreleased] — 2026-09-30
+
 Validation of the Conda reproduction against a real solver. **No version bump,
 no tag, no publication**: the published version is still `0.11.0b3`.
 

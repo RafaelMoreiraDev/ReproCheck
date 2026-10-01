@@ -11,6 +11,13 @@ exactly the ones a boolean would flatten:
 ``ROLLED_BACK``      the write was reverted, so the project is as it was
 ``ROLLBACK_FAILED``  the write could not be reverted: a severe ReproCheck error
 
+``VERIFICATION_FAILED`` is the one added for ``--verify``: the bytes were
+written, the post-fix verification did not hold, and they were restored. It is
+``ROLLED_BACK`` in meaning and shares its exit code, and it is separate only so
+that a record can say the revert was automatic and why. Returning the plain
+``ROLLED_BACK`` would be wrong here, because that one means the user asked for a
+rollback and it worked.
+
 No status other than ``APPLIED`` means "the project now contains the change".
 """
 
@@ -34,9 +41,24 @@ class ApplicationStatus(StrEnum):
     FAILED = "FAILED"
     ROLLED_BACK = "ROLLED_BACK"
     ROLLBACK_FAILED = "ROLLBACK_FAILED"
+    VERIFICATION_FAILED = "VERIFICATION_FAILED"
 
     def to_dict(self) -> str:
         return self.value
+
+
+#: Statuses that leave the project exactly as it was before the command.
+NO_CHANGE_STATUSES = frozenset(
+    {
+        ApplicationStatus.DRY_RUN,
+        ApplicationStatus.STALE,
+        ApplicationStatus.NOT_APPLICABLE,
+        ApplicationStatus.FAILED,
+        ApplicationStatus.ROLLED_BACK,
+        ApplicationStatus.VERIFICATION_FAILED,
+        ApplicationStatus.ROLLBACK_FAILED,
+    }
+)
 
 
 class RollbackState(StrEnum):
@@ -97,6 +119,101 @@ class Validation:
 
 
 @dataclass(frozen=True, slots=True)
+class VerificationCheck:
+    """One named question asked after the write, and its answer.
+
+    Named rather than a bare boolean so a failure says which question failed.
+    ``target-resolved`` and ``project-integrity`` failing are different problems
+    with different remedies, and a single ``success: false`` cannot tell them
+    apart.
+    """
+
+    name: str
+    passed: bool
+    detail: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {"name": self.name, "passed": self.passed, "detail": self.detail}
+
+
+@dataclass(frozen=True, slots=True)
+class FixVerification:
+    """What a post-fix verification established.
+
+    ``removed`` and ``added`` are finding **identities** in the same
+    line-insensitive form the baseline comparison uses, not counts: a count that
+    fell says nothing about which finding went, and a line number that moved
+    must not read as a new finding. The rollback fields are deliberately absent,
+    because the enclosing result already carries a typed ``rollback`` state and a
+    reason, and a second copy of the same fact is a second thing to disagree
+    with the first.
+    """
+
+    attempted: bool = False
+    success: bool = False
+    target_finding_id: str | None = None
+    target_resolved: bool = False
+    target_before: int = 0
+    target_after: int = 0
+    findings_before: int = 0
+    findings_after: int = 0
+    removed: tuple[str, ...] = ()
+    added: tuple[str, ...] = ()
+    regressions: tuple[str, ...] = ()
+    checks: tuple[VerificationCheck, ...] = ()
+    duration_seconds: float | None = None
+    not_attempted_reason: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "attempted": self.attempted,
+            "success": self.success,
+            "target_finding_id": self.target_finding_id,
+            "target_resolved": self.target_resolved,
+            "target_before": self.target_before,
+            "target_after": self.target_after,
+            "findings_before": self.findings_before,
+            "findings_after": self.findings_after,
+            "removed": list(self.removed),
+            "added": list(self.added),
+            "regressions": list(self.regressions),
+            "checks": [check.to_dict() for check in self.checks],
+            "duration_seconds": self.duration_seconds,
+            "not_attempted_reason": self.not_attempted_reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> FixVerification:
+        if not data:
+            return cls()
+        checks = data.get("checks") or []
+        return cls(
+            attempted=bool(data.get("attempted", False)),
+            success=bool(data.get("success", False)),
+            target_finding_id=data.get("target_finding_id"),
+            target_resolved=bool(data.get("target_resolved", False)),
+            target_before=int(data.get("target_before", 0)),
+            target_after=int(data.get("target_after", 0)),
+            findings_before=int(data.get("findings_before", 0)),
+            findings_after=int(data.get("findings_after", 0)),
+            removed=tuple(data.get("removed") or ()),
+            added=tuple(data.get("added") or ()),
+            regressions=tuple(data.get("regressions") or ()),
+            checks=tuple(
+                VerificationCheck(
+                    name=str(item.get("name", "")),
+                    passed=bool(item.get("passed", False)),
+                    detail=item.get("detail"),
+                )
+                for item in checks
+                if isinstance(item, dict)
+            ),
+            duration_seconds=data.get("duration_seconds"),
+            not_attempted_reason=data.get("not_attempted_reason"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class FixApplicationResult:
     """Everything one ``reprocheck fix`` invocation did, or refused to do."""
 
@@ -122,6 +239,7 @@ class FixApplicationResult:
     rollback: RollbackState = RollbackState.NOT_NEEDED
     rollback_reason: str | None = None
     validation: Validation = field(default_factory=Validation)
+    verification: FixVerification = field(default_factory=FixVerification)
     git_before: GitObservation = field(default_factory=GitObservation)
     git_after: GitObservation = field(default_factory=GitObservation)
     unexpected_paths: tuple[str, ...] = ()
@@ -150,6 +268,7 @@ class FixApplicationResult:
             "reason": self.reason,
             "messages": list(self.messages),
             "validation": self.validation.to_dict(),
+            "verification": self.verification.to_dict(),
             "rollback": self.rollback.value,
             "rollback_reason": self.rollback_reason,
             "backup_path": self.backup_path,
@@ -185,6 +304,7 @@ class ApplicationRecord:
     status: ApplicationStatus
     reason: str | None = None
     rollback_reason: str | None = None
+    verification: FixVerification = field(default_factory=FixVerification)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -205,6 +325,7 @@ class ApplicationRecord:
             "rollback_reason": self.rollback_reason,
             "status": self.status.value,
             "reason": self.reason,
+            "verification": self.verification.to_dict(),
             "reprocheck_version": self.reprocheck_version,
         }
 
@@ -231,4 +352,5 @@ class ApplicationRecord:
             status=ApplicationStatus(data.get("status", "FAILED")),
             reason=data.get("reason"),
             rollback_reason=data.get("rollback_reason"),
+            verification=FixVerification.from_dict(data.get("verification")),
         )

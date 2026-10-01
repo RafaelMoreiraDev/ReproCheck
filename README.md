@@ -52,9 +52,29 @@ reprocheck suggest .
 # 5. show exactly what would be written
 reprocheck fix . --suggestion FIX-RC140-001
 
-# 6. write it, verify it, and keep a record you can roll back
+# 6. write it, and keep a record you can roll back
 reprocheck fix . --suggestion FIX-RC140-001 --apply
+
+# 7. write it and check that it did what it claimed
+reprocheck fix . --suggestion FIX-RC140-001 --apply --verify
 ```
+
+`--verify` performs deterministic post-fix validation. After writing, it re-scans
+the project and asks four named questions: was the finding this suggestion
+addressed actually resolved, do the bytes still hold what was written, did
+anything new appear, and did any other file change. If any answer is no, the
+change is **reverted automatically** and the command exits non-zero.
+
+**It does not run the project's tests and does not execute project code.** It is
+a static comparison, and its report says so. Findings are compared by identity,
+so a line number that moved is not a new finding, and a total that fell is not
+what decides it.
+
+`--verify` requires `--apply`: nothing is written in a dry run, so there is
+nothing to verify. A verification that fails shares exit code 6 with a write
+that failed and was reverted, because both mean the same thing to a script:
+ReproCheck did not leave the change in place. The reason is in the report and in
+the record.
 
 Reports go to a per-user state directory
 (`%LOCALAPPDATA%\reprocheck` on Windows, `~/.local/state/reprocheck` elsewhere),

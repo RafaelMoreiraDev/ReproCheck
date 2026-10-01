@@ -9,7 +9,7 @@ from reprocheck.models import Finding, ScanReport, Severity
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard
     from reprocheck.diff.models import ReproducibilityDiff
-    from reprocheck.fix.models import FixApplicationResult
+    from reprocheck.fix.models import FixApplicationResult, FixVerification
     from reprocheck.suggest.models import SuggestionReport
 
 _SEVERITY_LABEL = {
@@ -511,6 +511,15 @@ def format_suggestions(
 # --------------------------------------------------------------------------- #
 
 
+def _count_new_errors(verification: FixVerification) -> int:
+    """How many of the new findings are errors.
+
+    Counted from the regressions rather than from a second comparison, so the
+    number on screen is the same one the check was decided by.
+    """
+    return sum(1 for item in verification.regressions if item.startswith("new error"))
+
+
 def format_fix(result: FixApplicationResult, json_path: str, markdown_path: str) -> str:
     """Render one fix invocation for the terminal.
 
@@ -543,6 +552,19 @@ def format_fix(result: FixApplicationResult, json_path: str, markdown_path: str)
         lines.append(f"  {'PASS' if result.validation.finding_resolved else 'FAILED'}")
         if result.validation.detail:
             lines.append(f"  {result.validation.detail}")
+    if result.verification.attempted:
+        verification = result.verification
+        lines.append("")
+        lines.append("Verification:")
+        lines.append(
+            f"  target resolved: {'yes' if verification.target_after == 0 else 'no'}"
+        )
+        lines.append(f"  new errors: {_count_new_errors(verification)}")
+        lines.append(f"  regressions: {len(verification.regressions)}")
+        for check in verification.checks:
+            if not check.passed:
+                lines.append(f"  failed check: {check.name} — {check.detail}")
+        lines.append(f"  result: {'PASS' if verification.success else 'FAIL'}")
     if result.rollback.value != "NOT_NEEDED":
         lines.append("")
         lines.append("Rollback:")

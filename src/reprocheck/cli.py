@@ -325,6 +325,16 @@ def _add_fix_parser(subparsers) -> None:
         help="actually write the change; without it nothing is modified",
     )
     fix.add_argument(
+        "--verify",
+        action="store_true",
+        help=(
+            "after writing, re-scan the project and check that the finding was "
+            "resolved, that nothing new appeared and that no other file changed; "
+            "reverts the change automatically if any of that fails. Requires "
+            "--apply. It does not run the project's tests or execute its code"
+        ),
+    )
+    fix.add_argument(
         "--json",
         metavar="<arquivo>",
         default=None,
@@ -540,11 +550,26 @@ def _run_fix(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_OPERATIONAL
+    if args.verify and not args.apply:
+        print(
+            "reprocheck: error: --verify has no meaning without --apply. Nothing "
+            "is written in a dry run, so there is nothing to verify; add --apply "
+            "to write the change and then check it."
+            + (
+                " A rollback is already a write and does not take --verify."
+                if args.rollback
+                else ""
+            ),
+            file=sys.stderr,
+        )
+        return EXIT_OPERATIONAL
     try:
         if args.rollback:
             result = run_rollback(args.path, args.rollback)
         else:
-            result = run_fix(args.path, args.suggestion, apply=args.apply)
+            result = run_fix(
+                args.path, args.suggestion, apply=args.apply, verify=args.verify
+            )
     except ScanError as exc:
         print(f"reprocheck: error: {exc}", file=sys.stderr)
         return EXIT_OPERATIONAL
@@ -574,6 +599,18 @@ def _run_fix(args: argparse.Namespace) -> int:
 
 
 def _fix_exit_code(result: FixApplicationResult) -> int:
+    """Map one application outcome to an exit code.
+
+    A verification that fails and reverts shares exit code 6 with a write that
+    failed and reverted, and deliberately so: both mean the same thing to a
+    caller, which is that ReproCheck did not leave the change in place. The
+    reason is in the report and in the record, where a caller can read it, and a
+    separate code for it would tell a script nothing it can act on.
+
+    The one status that is not success and not "unchanged" is
+    ``ROLLBACK_FAILED``: the file may differ from both states, which is the
+    severe case and keeps its own code.
+    """
     if result.status in {
         ApplicationStatus.APPLIED,
         ApplicationStatus.DRY_RUN,
